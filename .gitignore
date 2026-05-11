@@ -1,0 +1,28 @@
+.vs/
+bin/
+obj/
+*.user
+*.suo
+results*.csv
+models/*.zip
+
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# vscode
+.vscode/
+
+# generated MIDAS files
+models_data/
+
+# MIDAS file extensions
+*.mcb
+*.bak
+*.OUT
+*.CA1

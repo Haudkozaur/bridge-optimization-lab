@@ -2,7 +2,7 @@ import os
 import random
 from pathlib import Path
 import time
-from unittest import case
+
 
 from midas_civil import *
 

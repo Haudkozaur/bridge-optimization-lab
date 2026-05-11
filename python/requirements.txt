@@ -1,0 +1,7 @@
+numpy
+pandas
+matplotlib
+openpyxl
+python-dotenv
+openseespy
+midas-civil

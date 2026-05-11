@@ -3,10 +3,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-# ============================================================
-# SPLINE DO PROFILU KABLA
-# ============================================================
-
 def natural_cubic_spline_second_derivatives(xp, yp):
     xp = np.asarray(xp, dtype=float)
     yp = np.asarray(yp, dtype=float)
@@ -58,12 +54,8 @@ def spline_y_and_ydd(x, xp, yp, m):
     return y, ydd
 
 
-# ============================================================
-# RECOVERY SIŁ Z PRZEMIESZCZEŃ
-# ============================================================
-
 def recover_element_forces_from_curvature(E, I, Le, node_i, node_j, n_points=20):
-    wi = ops.nodeDisp(node_i, 2) # pyright: ignore[reportAttributeAccessIssue]
+    wi = ops.nodeDisp(node_i, 2)
     thi = ops.nodeDisp(node_i, 3)
 
     wj = ops.nodeDisp(node_j, 2)
@@ -92,13 +84,9 @@ def recover_element_forces_from_curvature(E, I, Le, node_i, node_j, n_points=20)
     return x, V, M
 
 
-# ============================================================
-# ANALIZA JEDNEGO PRZYPADKU
-# ============================================================
-
 def run_case(case_name, q_elements, L_total, L_left, n_div, E, A, I):
     ops.wipe()
-    ops.model("basic", "-ndm", 2, "-ndf", 3) # pyright: ignore[reportAttributeAccessIssue]
+    ops.model("basic", "-ndm", 2, "-ndf", 3)
 
     dx = L_total / n_div
     x_nodes = np.array([i * dx for i in range(n_div + 1)])
@@ -110,8 +98,6 @@ def run_case(case_name, q_elements, L_total, L_left, n_div, E, A, I):
     mid_node = int(round(L_left / dx)) + 1
     right_node = n_div + 1
 
-    # left: 111000 -> w 2D: UX, UY fixed, RZ free
-    # middle/right: 011000 -> w 2D: UY fixed
     ops.fix(left_node, 1, 1, 0)
     ops.fix(mid_node, 0, 1, 0)
     ops.fix(right_node, 0, 1, 0)
@@ -187,9 +173,33 @@ def run_case(case_name, q_elements, L_total, L_left, n_div, E, A, I):
     }
 
 
-# ============================================================
-# MAIN
-# ============================================================
+def annotate_min_max(x, y):
+    max_idx = np.argmax(y)
+    min_idx = np.argmin(y)
+
+    max_x = x[max_idx]
+    max_y = y[max_idx]
+    min_x = x[min_idx]
+    min_y = y[min_idx]
+
+    plt.scatter(max_x, max_y)
+    plt.annotate(
+        f"max = {max_y:.3f}",
+        (max_x, max_y),
+        textcoords="offset points",
+        xytext=(0, 10),
+        ha="center",
+    )
+
+    plt.scatter(min_x, min_y)
+    plt.annotate(
+        f"min = {min_y:.3f}",
+        (min_x, min_y),
+        textcoords="offset points",
+        xytext=(0, -15),
+        ha="center",
+    )
+
 
 def main():
     L_left = 20.0
@@ -200,24 +210,22 @@ def main():
     n_div_right = 40
     n_div = n_div_left + n_div_right
 
-
-
     dx = L_total / n_div
 
-    E = 35e6          # [kN/m2] około C40/50
-    b = 0.5           # [m]
-    h = 1.0           # [m]
+    E = 35e6
+    b = 0.5
+    h = 1.0
     A = b * h
     I = b * h**3 / 12.0
 
-    gamma_concrete = 25.0  # kN/m3
+    gamma_concrete = 25.0
     q_sw = -gamma_concrete * A
 
-    udl = 10.0        # [kN/m], w dół
+    udl = 10.0
 
     n_tendons = 3
     tendon_force_kn = 220.0
-    P_total = n_tendons * tendon_force_kn  # [kN]
+    P_total = n_tendons * tendon_force_kn
 
     tendon_x = np.array([
         0.0,
@@ -240,9 +248,9 @@ def main():
     x_mid_elements = np.array([(i + 0.5) * dx for i in range(n_div)])
     _, tendon_ydd_mid = spline_y_and_ydd(x_mid_elements, tendon_x, tendon_e, spline_m)
 
-    q_p_elements = P_total * tendon_ydd_mid       # dodatnie = do góry
-    q_udl_elements = np.full(n_div, -udl)         # ujemne = w dół
-    q_sw_elements = np.full(n_div, q_sw)       # ujemne = w dół
+    q_p_elements = P_total * tendon_ydd_mid
+    q_udl_elements = np.full(n_div, -udl)
+    q_sw_elements = np.full(n_div, q_sw)
     q_total_elements = q_p_elements + q_udl_elements + q_sw_elements
 
     print("=== MODEL ===")
@@ -264,24 +272,6 @@ def main():
     print(f"q_total min/max = {q_total_elements.min():.6f} / {q_total_elements.max():.6f} kN/m")
     print()
 
-    # import time
-    # start_time = time.perf_counter()
-
-    # for i in range(1000):
-    #     cases = [
-    #         run_case("Prestress only", q_p_elements, L_total, L_left, n_div, E, A, I),
-    #         run_case("UDL only", q_udl_elements, L_total, L_left, n_div, E, A, I),
-    #         run_case("Self-weight only", q_sw_elements, L_total, L_left, n_div, E, A, I),
-    #         run_case("Total", q_total_elements, L_total, L_left, n_div, E, A, I),
-    #     ]
-
-    # end_time = time.perf_counter()
-
-    # elapsed = end_time - start_time
-
-    # print(f"\nTime for 1000 analyses: {elapsed:.3f} s")
-    # print(f"Average per iteration: {elapsed / 1000:.6f} s")
-
     cases = [
         run_case("Prestress only", q_p_elements, L_total, L_left, n_div, E, A, I),
         run_case("UDL only", q_udl_elements, L_total, L_left, n_div, E, A, I),
@@ -301,12 +291,8 @@ def main():
         print(f"  M min/max = {c['M'].min():.6f} / {c['M'].max():.6f} kNm")
         print()
 
-    # ============================================================
-    # PLOTS
-    # ============================================================
-
     x_plot = np.linspace(0.0, L_total, 500)
-    y_plot, ydd_plot = spline_y_and_ydd(x_plot, tendon_x, tendon_e, spline_m)
+    y_plot, _ = spline_y_and_ydd(x_plot, tendon_x, tendon_e, spline_m)
 
     plt.figure()
     plt.plot(x_plot, np.zeros_like(x_plot), label="Beam axis")
@@ -316,54 +302,32 @@ def main():
     plt.xlabel("x [m]")
     plt.ylabel("eccentricity z [m]")
     plt.title("Tendon profile")
-    plt.grid(True)
-    plt.axis("equal")
-    plt.legend()
-
-    plt.figure()
-    plt.plot(x_mid_elements, q_p_elements, label="Prestress equivalent q_p")
-    plt.plot(x_mid_elements, q_udl_elements, label="UDL")
-    plt.plot(x_mid_elements, q_total_elements, label="Total")
-    plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(L_left, linestyle="--", linewidth=0.8)
-    plt.xlabel("x [m]")
-    plt.ylabel("q [kN/m]")
-    plt.title("Element loads")
+    plt.ylim(tendon_e.min() - 0.15, tendon_e.max() + 0.15)
     plt.grid(True)
     plt.legend()
 
     plt.figure()
     scale = 100.0
     for c in cases:
-        plt.plot(c["x_nodes"], c["uy_nodes"] * scale, label=f"{c['name']} x{scale:g}")
+        y = c["uy_nodes"] * scale
+        plt.plot(c["x_nodes"], y, label=f"{c['name']} x{scale:g}")
+        annotate_min_max(c["x_nodes"], y)
+
     plt.axhline(0.0, linewidth=0.8)
     plt.axvline(L_left, linestyle="--", linewidth=0.8)
     plt.xlabel("x [m]")
     plt.ylabel("scaled uy [m]")
-    plt.title("Deformed shapes")
+    plt.title("Deflection")
     plt.grid(True)
     plt.legend()
 
     plt.figure()
-    for c in cases:
-        plt.plot(c["x"], c["V"], label=c["name"])
-    plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(L_left, linestyle="--", linewidth=0.8)
-    plt.xlabel("x [m]")
-    plt.ylabel("V [kN]")
-    plt.title("Shear force diagrams")
-    plt.grid(True)
-    plt.legend()
-
-    plt.figure()
-
     for c in cases:
         x = c["x"]
         M = -c["M"]
 
         plt.plot(x, M, label=c["name"])
 
-        # max
         max_idx = np.argmax(M)
         max_x = x[max_idx]
         max_y = M[max_idx]
@@ -374,10 +338,9 @@ def main():
             (max_x, max_y),
             textcoords="offset points",
             xytext=(0, 10),
-            ha="center"
+            ha="center",
         )
 
-        # min
         min_idx = np.argmin(M)
         min_x = x[min_idx]
         min_y = M[min_idx]
@@ -388,16 +351,14 @@ def main():
             (min_x, min_y),
             textcoords="offset points",
             xytext=(0, -15),
-            ha="center"
+            ha="center",
         )
 
     plt.axhline(0.0, linewidth=0.8)
     plt.axvline(L_left, linestyle="--", linewidth=0.8)
-
     plt.xlabel("x [m]")
     plt.ylabel("M [kNm]")
     plt.title("Bending moment diagrams")
-
     plt.grid(True)
     plt.legend()
     plt.show()

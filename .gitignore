@@ -1,28 +1,49 @@
+# Visual Studio / .NET
 .vs/
 bin/
 obj/
 *.user
 *.suo
-results*.csv
-models/*.zip
 
-# secrets
-.env
-
-# python
+# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
 
-# vscode
+# VS Code
 .vscode/
 
-# generated MIDAS files
-models_data/
+# Environment files
+.env
+.env.*
+!.env.example
 
-# MIDAS file extensions
+# Generated datasets
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.parquet
+
+# ML models
+dotnet/models/
+models/
+*.onnx
+*.pkl
+*.joblib
+*.h5
+
+# MIDAS files
+models_data/
 *.mcb
+*.mct
+*.mgb
 *.bak
 *.OUT
 *.CA1
+
+# Temporary / system files
+Thumbs.db
+.DS_Store
+*.tmp

@@ -2,7 +2,7 @@ from random import Random
 
 from midas_civil import Boundary, Element, Load, Material, Model, Section
 
-from experiment.experiment_config import Model_Type, SingleSpanBeamConfig
+from model_inputs.configs.experiment_config import Model_Type, SingleSpanBeamConfig
 
 
 class SingleSpanBeam:

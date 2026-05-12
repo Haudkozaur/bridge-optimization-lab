@@ -425,7 +425,7 @@
 
 from midas_civil import Result
 
-from experiment.experiment_config import ExperimentConfig
+from model_inputs.configs.experiment_config import ExperimentConfig
 
 
 class ResultCollector:

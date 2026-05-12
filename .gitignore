@@ -35,13 +35,19 @@ models/
 *.h5
 
 # MIDAS files
-models_data/
+model_outputs/
 *.mcb
 *.mct
 *.mgb
 *.bak
 *.OUT
 *.CA1
+*.spa
+*.rst
+*.mec
+*.nfxp
+*.out
+*.log
 
 # Temporary / system files
 Thumbs.db

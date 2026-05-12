@@ -2,7 +2,7 @@ from random import Random
 
 from midas_civil import Boundary, Element, Load, Material, Model, Section, Tendon, Offset
 
-from experiment.experiment_config import Model_Type, SingleSpanPostTensionedBeamConfig
+from model_inputs.configs.experiment_config import Model_Type, SingleSpanPostTensionedBeamConfig
 
 
 class SingleSpanPostTensionedBeam:

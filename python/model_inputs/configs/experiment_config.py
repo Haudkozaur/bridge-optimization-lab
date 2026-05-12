@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Union
 
-from experiment.ranges import FloatRange, IntRange
+from common.ranges import FloatRange, IntRange
 
 # ENUM to specify which type of model to generate
 class Model_Type(Enum):

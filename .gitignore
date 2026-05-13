@@ -53,3 +53,5 @@ model_outputs/
 Thumbs.db
 .DS_Store
 *.tmp
+
+python/data_prep/

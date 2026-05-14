@@ -23,7 +23,7 @@ INPUT_CSV = Path(
     r"D:\Doktorat\bridge-optimization-lab\python\model_inputs\prepared_inputs\test\input.csv"
 )
 
-MODEL_INDEX = 1
+MODEL_INDEX = 90
 
 
 def to_float(row, key):
@@ -300,20 +300,59 @@ def main():
     # tendon profile
     # =========================
 
+    BEAM_HEIGHT = 1.0  # m
+
     plt.figure()
 
+    # beam top/bottom
+    beam_top = +BEAM_HEIGHT / 2.0
+    beam_bottom = -BEAM_HEIGHT / 2.0
+
+    # beam rectangle
+    plt.plot(
+        [0.0, L_total],
+        [beam_top, beam_top],
+        color="black",
+        linewidth=1.0,
+    )
+
+    plt.plot(
+        [0.0, L_total],
+        [beam_bottom, beam_bottom],
+        color="black",
+        linewidth=1.0,
+    )
+
+    plt.plot(
+        [0.0, 0.0],
+        [beam_bottom, beam_top],
+        color="black",
+        linewidth=1.0,
+    )
+
+    plt.plot(
+        [L_total, L_total],
+        [beam_bottom, beam_top],
+        color="black",
+        linewidth=1.0,
+    )
+
+    # beam axis
     plt.plot(
         x_plot,
         np.zeros_like(x_plot),
         label="Beam axis",
     )
 
+    # tendon
     plt.plot(
         x_plot,
         y_plot,
+        linewidth=2.0,
         label="Tendon profile",
     )
 
+    # control points
     plt.scatter(
         tendon_x,
         tendon_e,
@@ -321,6 +360,7 @@ def main():
         label="Control points",
     )
 
+    # middle support
     plt.axvline(
         L_left,
         linestyle="--",
@@ -335,9 +375,16 @@ def main():
         f"Tendon profile | model {MODEL_INDEX}"
     )
 
+    plt.xlim(0.0, L_total)
+    plt.ylim(
+        beam_bottom - 0.1,
+        beam_top + 0.1,
+    )
+
+    plt.gca().set_aspect("equal", adjustable="box")
+
     plt.grid(True)
     plt.legend()
-
     # =========================
     # equivalent prestress load
     # =========================
@@ -437,6 +484,7 @@ def main():
         x = c["x"]
         M = -c["M"]
 
+
         plt.plot(
             x,
             M,
@@ -444,6 +492,21 @@ def main():
         )
 
         annotate_min_max(x, M)
+        # print_node_moment_jumps(c, sign=-1.0)
+
+        # x_plot_m, M_plot_m = collapse_duplicate_x_values(
+        #     x,
+        #     M,
+        #     tol=1e-9,
+        # )
+
+        # plt.plot(
+        #     x_plot_m,
+        #     M_plot_m,
+        #     label=c["name"],
+        # )
+
+        # annotate_min_max(x_plot_m, M_plot_m)
 
     plt.axhline(0.0, linewidth=0.8)
 
@@ -550,5 +613,51 @@ def main():
     plt.show()
 
 
+def collapse_duplicate_x_values(x, y, tol=1e-9):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    rounded_x = np.round(x / tol) * tol
+    unique_x = np.unique(rounded_x)
+
+    out_x = []
+    out_y = []
+
+    for ux in unique_x:
+        mask = rounded_x == ux
+        out_x.append(float(np.mean(x[mask])))
+        out_y.append(float(np.mean(y[mask])))
+
+    return np.array(out_x), np.array(out_y)
+
+
+def print_node_moment_jumps(result, sign=-1.0):
+    x = np.asarray(result["x"], dtype=float)
+    m = sign * np.asarray(result["M"], dtype=float)
+    x_nodes = np.asarray(result["x_nodes"], dtype=float)
+
+    dx = x_nodes[1] - x_nodes[0]
+    tol = dx * 1.0e-6
+
+    print(f"=== MOMENT JUMPS | {result['name']} ===")
+    print("node | x [m] | values at node | jump")
+    print("-" * 90)
+
+    for node_id, node_x in enumerate(x_nodes, start=1):
+        mask = np.isclose(x, node_x, atol=tol)
+        values = m[mask]
+
+        if len(values) >= 2:
+            jump = values.max() - values.min()
+            print(
+                f"{node_id:4d} | "
+                f"{node_x:8.3f} | "
+                f"{values} | "
+                f"{jump: .6f}"
+            )
+
+    print()
+
 if __name__ == "__main__":
     main()
+

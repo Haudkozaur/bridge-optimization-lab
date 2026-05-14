@@ -4,6 +4,7 @@ from solver_runner.opensees.spline import (
     natural_cubic_spline_second_derivatives,
     prestress_distributed_load_from_spline,
     prestress_end_loads_from_spline,
+    prestress_element_nodal_loads_from_spline
 )
 
 from solver_runner.opensees.two_span_solver import run_case
@@ -174,13 +175,26 @@ class TwoSpanOpenSeesSolver:
         for case_name, result in cases.items():
             moment_by_node = {}
 
-            x = result["x"]
-            m = result["M"]
+            x = np.asarray(result["x"], dtype=float)
+            m = np.asarray(result["M"], dtype=float)
+            x_nodes = np.asarray(result["x_nodes"], dtype=float)
+
+            dx = x_nodes[1] - x_nodes[0]
+            tol = dx * 1.0e-6
 
             for node_id in range(1, total_divs + 2):
-                node_x = result["x_nodes"][node_id - 1]
-                idx = int(np.argmin(np.abs(x - node_x)))
-                moment_by_node[node_id] = float(m[idx])
+                node_x = x_nodes[node_id - 1]
+
+                mask = np.isclose(x, node_x, atol=tol)
+
+                if np.any(mask):
+                    values = m[mask]
+
+                    selected = values[np.argmax(np.abs(values))]
+                    moment_by_node[node_id] = float(selected)
+                else:
+                    idx = int(np.argmin(np.abs(x - node_x)))
+                    moment_by_node[node_id] = float(m[idx])
 
             out[case_name] = moment_by_node
 

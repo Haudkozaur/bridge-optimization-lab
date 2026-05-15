@@ -19,7 +19,7 @@ def main():
         PYTHON_ROOT
         / "model_inputs"
         / "prepared_inputs"
-        / "20260512_183128"
+        / "20260515_104115"
         / "input.csv"
     )
 

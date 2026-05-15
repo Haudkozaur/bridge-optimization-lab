@@ -3,8 +3,8 @@ from pathlib import Path
 
 
 INPUT_FILES = [
-    Path(r"midas_output.csv"),
-    Path(r"solver_output.csv"),
+    Path(r"D:\Doktorat\bridge-optimization-lab\python\model_outputs\models_data\midas_run_20260515_105022\midas_output.csv"),
+    Path(r"D:\Doktorat\bridge-optimization-lab\python\model_outputs\models_data\solver_run_20260515_104212\solver_output.csv"),
 ]
 
 PRESTRESS_FORCE_KN = 660.0

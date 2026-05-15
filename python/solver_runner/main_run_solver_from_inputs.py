@@ -10,11 +10,18 @@ from solver_runner.app.solver_batch_runner import SolverBatchRunner
 
 
 def main():
+    # input_csv_path = (
+    #     PYTHON_ROOT
+    #     / "model_inputs"
+    #     / "prepared_inputs"
+    #     / "test"
+    #     / "input.csv"
+    # )
     input_csv_path = (
         PYTHON_ROOT
         / "model_inputs"
         / "prepared_inputs"
-        / "test"
+        / "20260515_104115"
         / "input.csv"
     )
 

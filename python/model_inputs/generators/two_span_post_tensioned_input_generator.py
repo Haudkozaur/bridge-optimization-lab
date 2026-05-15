@@ -11,6 +11,7 @@ class TwoSpanPostTensionedInputGenerator:
     def __init__(self, config: TwoSpanPostTensionedBeamConfig, rng: Random):
         self.config = config
         self.rng = rng
+        self.TARGET_ELEMENT_LENGTH_M = 0.25
 
     def _sample_float_range(self, value_range: FloatRange, ndigits: int = 3) -> float:
         if value_range is None:
@@ -80,7 +81,7 @@ class TwoSpanPostTensionedInputGenerator:
         return value
 
     def _get_divisions_from_span_length(self, span_length_m: float) -> int:
-        return self._make_even(max(4, round(span_length_m / 1.5)))
+        return self._make_even(max(4, round(span_length_m / self.TARGET_ELEMENT_LENGTH_M)))
 
     def get_max_node_id(self) -> int:
         max_len_left = self.config.left_span_length_m.max

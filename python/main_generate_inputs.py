@@ -17,7 +17,7 @@ def main():
     input_path = run_dir / "input.csv"
 
     cfg = ExperimentConfig(
-        n_models=10,
+        n_models=10, 
         model_type=Model_Type.TWO_SPAN_POST_TENSIONED_BEAM,
         random_seed=None,
         save_inputs=True,

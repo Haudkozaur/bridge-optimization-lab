@@ -2,9 +2,7 @@ import numpy as np
 
 from solver_runner.opensees.spline import (
     natural_cubic_spline_second_derivatives,
-    prestress_distributed_load_from_spline,
-    prestress_end_loads_from_spline,
-    prestress_element_nodal_loads_from_spline
+    prestress_element_q_and_moment_loads_from_spline,
 )
 
 from solver_runner.opensees.two_span_solver import run_case
@@ -56,44 +54,26 @@ class TwoSpanOpenSeesSolver:
             tendon_e,
         )
 
-        x_mid_elements = np.array([
-            (i + 0.5) * dx
-            for i in range(total_divs)
+        x_nodes = np.array([
+            i * dx
+            for i in range(total_divs + 1)
         ])
 
-        (
-            _tendon_y_mid,
-            _tendon_yd_mid,
-            _tendon_ydd_mid,
-            _curvature_vertical_component,
-            q_ps_elements,
-        ) = prestress_distributed_load_from_spline(
-            x_mid_elements,
-            tendon_x,
-            tendon_e,
-            spline_m,
-            p_total,
-        )
+        # ============================================================
+        # PRESTRESS V3:
+        # q from tendon angle change per element
+        # + nodal moments from eccentricity
+        # ============================================================
 
-        prestress_end_loads = prestress_end_loads_from_spline(
-            tendon_x,
-            tendon_e,
-            spline_m,
-            p_total,
+        q_ps_elements, prestress_nodal_loads = (
+            prestress_element_q_and_moment_loads_from_spline(
+                x_nodes=x_nodes,
+                xp=tendon_x,
+                yp=tendon_e,
+                spline_m=spline_m,
+                prestress_force=p_total,
+            )
         )
-
-        prestress_nodal_loads = [
-            {
-                "node": 1,
-                "Fz": prestress_end_loads["left"]["Fz"],
-                "Mz": prestress_end_loads["left"]["Mz"],
-            },
-            {
-                "node": total_divs + 1,
-                "Fz": prestress_end_loads["right"]["Fz"],
-                "Mz": prestress_end_loads["right"]["Mz"],
-            },
-        ]
 
         q_udl_elements = np.full(total_divs, q_udl)
         q_sw_elements = np.full(total_divs, q_sw)
@@ -190,7 +170,8 @@ class TwoSpanOpenSeesSolver:
                 if np.any(mask):
                     values = m[mask]
 
-                    selected = values[np.argmax(np.abs(values))]
+                    # selected = values[np.argmax(np.abs(values))]
+                    selected = float(np.mean(values))
                     moment_by_node[node_id] = float(selected)
                 else:
                     idx = int(np.argmin(np.abs(x - node_x)))

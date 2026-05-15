@@ -1,102 +1,65 @@
 # bridge-optimization-lab
 
-Research codebase for optimization of prestressed concrete bridge girders using FEM, surrogate machine learning models and evolutionary algorithms.
-
-## Components
-
-- **MidasBulkRunner** – generates bridge datasets using MIDAS Civil NX.
-- **BridgeMLApp** – trains surrogate ML models for structural response prediction.
-- **BridgeEAApp** – searches for optimal tendon layouts using evolutionary optimization.
+Research codebase for optimization of prestressed concrete bridge girders using:
+- finite element analysis (FEM),
+- surrogate machine learning models,
+- evolutionary optimization algorithms,
+- automated structural dataset generation.
 
 ---
 
-# Repository structure
+# Main components
 
-```txt
-bridge-optimization-lab/
-├─ python/
-│  ├─ requirements.txt
-│  ├─ midas-bulk-runner/
-│  ├─ solver/
-│  └─ data_prep/
-│
-├─ dotnet/
-│  ├─ BridgeMLApp/
-│  ├─ BridgeEAApp/
-│  └─ BridgeMLApp.sln
-│
-└─ README.md
-```
+## Python modules
+
+### `midas_runner`
+Automated MIDAS Civil NX model generation and analysis pipeline.
+
+Features:
+- random bridge model generation,
+- tendon geometry generation,
+- MIDAS Civil API automation,
+- structural analysis execution,
+- result extraction to CSV datasets.
 
 ---
 
-# Requirements
+### `solver_runner`
+Custom lightweight FEM beam solver based on OpenSeesPy.
 
-- Python 3.12 recommended
-- Python 3.13 is currently not supported due to OpenSeesPy compatibility issues
-- .NET 10 SDK recommended
-- Git
+Features:
+- two-span beam analysis,
+- prestressing tendon equivalent load generation,
+- multiple tendon spline/interpolation strategies,
+- equivalent nodal load experiments,
+- comparison against MIDAS Civil results.
 
----
-
-# Python setup
-
-Clone repository:
-
-```bash
-git clone https://github.com/Haudkozaur/bridge-optimization-lab.git
-cd bridge-optimization-lab/python
-```
-
-Create virtual environment using Python 3.12:
-
-```bash
-py -3.12 -m venv .venv
-```
-
-Activate environment (PowerShell):
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
 
 ---
 
-# .NET setup
+## .NET applications
 
-Restore NuGet packages:
+### `BridgeMLApp`
+Surrogate machine learning training application based on ML.NET.
 
-```bash
-cd ../dotnet
-dotnet restore
-```
-
-Build solution:
-
-```bash
-dotnet build
-```
-
-Run applications:
-
-```bash
-dotnet run --project BridgeMLApp
-```
-
-```bash
-dotnet run --project BridgeEAApp
-```
+Features:
+- LightGBM regression training,
+- k-fold validation,
+- export/import of trained surrogate models,
+- prediction of bridge response quantities:
+  - moments,
+  - deflections,
+  - support reactions,
+  - prestress effects.
 
 ---
 
-# Notes
+### `BridgeEAApp`
+Evolutionary optimization application for tendon layout optimization.
 
-- Generated datasets, ML models and MIDAS output files are excluded from version control.
-- OpenSeesPy may require additional Windows runtime dependencies depending on the local environment.
-- MIDAS Civil automation requires locally installed MIDAS Civil NX
+Features:
+- evolutionary/random-search optimization,
+- surrogate-model-based fitness evaluation,
+- optimization of tendon eccentricities,
+- minimization of structural response metrics.
+

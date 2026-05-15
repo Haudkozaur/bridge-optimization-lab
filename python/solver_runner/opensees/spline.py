@@ -18,6 +18,8 @@ from scipy.interpolate import CubicHermiteSpline, PchipInterpolator, UnivariateS
 #   "piecewise_parabola"
 #   "piecewise_hermite"
 #   "smoothstep"
+#   "parabola_ends_smoothstep_middle"
+
 SPLINE_VARIANT: Literal[
     "pchip",
     "pchip_smoothed",
@@ -25,7 +27,9 @@ SPLINE_VARIANT: Literal[
     "piecewise_parabola",
     "piecewise_hermite",
     "smoothstep",
-] = "smoothstep"
+    "parabola_ends_smoothstep_middle",
+    "piecewise_bezier",
+] = "piecewise_bezier"
 
 # Pick active equivalent prestress load style here.
 # Existing solver uses prestress_element_q_and_moment_loads_from_spline(),
@@ -44,6 +48,9 @@ PRESTRESS_LOAD_VARIANT: Literal[
 # ============================================================
 # NUMERICAL PARAMETERS
 # ============================================================
+
+# Not used:
+
 PCHIP_SAMPLE_POINTS = 200
 SMOOTHING_FACTOR = 0.0001
 AMPLIFIED_SAMPLE_POINTS = 100
@@ -53,9 +60,12 @@ CURVATURE_AMPLIFICATION = 1.3
 SLOPE_FACTOR_END = 1.0
 SLOPE_FACTOR_MIDDLE = 1.0
 
-# Small tuning knob for the current angle-change q method.
-ANGLE_Q_FACTOR = 1.05
+# Currently used:
 
+# Small tuning for the current angle change q method.
+ANGLE_Q_FACTOR = 1.05
+# Bezier tuning - best fits midas on 1.7
+BEZIER_SLOPE_FACTOR = 1.7
 
 # ============================================================
 # COMMON HELPERS
@@ -399,6 +409,249 @@ class PiecewiseSmoothstepSpline:
 def build_smoothstep_spline(xp, yp) -> PiecewiseSmoothstepSpline:
     return PiecewiseSmoothstepSpline(xp, yp)
 
+# ============================================================
+# SPLINE VARIANT 7:
+# parabola on end spans 1-2 and 4-5,
+# smoothstep on middle segments 2-3 and 3-4
+# ============================================================
+class ParabolaEndsSmoothstepMiddleSpline:
+    """
+    Experimental tendon spline.
+
+    Segments:
+    - control points 1-2: parabola with zero slope at point 2
+    - control points 2-3: smoothstep
+    - control points 3-4: smoothstep
+    - control points 4-5: parabola with zero slope at point 4
+
+    """
+
+    def __init__(self, xp, yp):
+        xp, yp = _validate_control_points(xp, yp)
+
+        if len(xp) != 5:
+            raise ValueError(
+                "ParabolaEndsSmoothstepMiddleSpline expects exactly 5 control points"
+            )
+
+        self.xp = xp
+        self.yp = yp
+
+    def __call__(self, x):
+        return self._eval(x, derivative_order=0)
+
+    def derivative(self, order: int = 1):
+        return lambda x: self._eval(x, derivative_order=order)
+
+    def _eval(self, x, derivative_order: int = 0):
+        x_arr, scalar_input = _as_array_keep_scalar(x)
+        out = np.zeros_like(x_arr, dtype=float)
+
+        x0, x1, x2, x3, x4 = self.xp
+        y0, y1, y2, y3, y4 = self.yp
+
+        segments = [
+            ("left_parabola", x0, x1, y0, y1),
+            ("smoothstep", x1, x2, y1, y2),
+            ("smoothstep", x2, x3, y2, y3),
+            ("right_parabola", x3, x4, y3, y4),
+        ]
+
+        for i, (kind, xa, xb, ya, yb) in enumerate(segments):
+            if i == 0:
+                mask = (x_arr >= xa) & (x_arr <= xb)
+            else:
+                mask = (x_arr > xa) & (x_arr <= xb)
+
+            if not np.any(mask):
+                continue
+
+            xx = x_arr[mask]
+            h = xb - xa
+            t = (xx - xa) / h
+            dy = yb - ya
+
+            if kind == "smoothstep":
+                if derivative_order == 0:
+                    s = 3.0 * t**2 - 2.0 * t**3
+                    out[mask] = ya + dy * s
+                elif derivative_order == 1:
+                    ds_dt = 6.0 * t - 6.0 * t**2
+                    out[mask] = dy * ds_dt / h
+                elif derivative_order == 2:
+                    d2s_dt2 = 6.0 - 12.0 * t
+                    out[mask] = dy * d2s_dt2 / h**2
+                elif derivative_order == 3:
+                    out[mask] = dy * (-12.0) / h**3
+                else:
+                    out[mask] = 0.0
+
+            elif kind == "left_parabola":
+                # parabola through point 1 and 2, with zero slope at point 2
+                # y = y1 + a * (x - x1)^2
+                a = (ya - yb) / h**2
+                dx = xx - xb
+
+                if derivative_order == 0:
+                    out[mask] = yb + a * dx**2
+                elif derivative_order == 1:
+                    out[mask] = 2.0 * a * dx
+                elif derivative_order == 2:
+                    out[mask] = 2.0 * a
+                else:
+                    out[mask] = 0.0
+
+            elif kind == "right_parabola":
+                # parabola through point 4 and 5, with zero slope at point 4
+                # y = y3 + a * (x - x3)^2
+                a = (yb - ya) / h**2
+                dx = xx - xa
+
+                if derivative_order == 0:
+                    out[mask] = ya + a * dx**2
+                elif derivative_order == 1:
+                    out[mask] = 2.0 * a * dx
+                elif derivative_order == 2:
+                    out[mask] = 2.0 * a
+                else:
+                    out[mask] = 0.0
+
+        return _return_scalar_if_needed(out, scalar_input)
+
+
+def build_parabola_ends_smoothstep_middle_spline(
+    xp,
+    yp,
+) -> ParabolaEndsSmoothstepMiddleSpline:
+    return ParabolaEndsSmoothstepMiddleSpline(xp, yp)
+
+# ============================================================
+# SPLINE VARIANT 8: piecewise cubic Bézier
+# ============================================================
+class PiecewiseBezierSpline:
+    """
+    Piecewise cubic Bézier tendon spline.
+
+    Uses:
+    - control points from xp / yp
+    - automatically estimated slopes
+    - cubic Bézier segments converted from Hermite form
+
+    Properties:
+    - passes exactly through all control points,
+    - smooth first derivative,
+    - controllable curvature,
+    - no global oscillations.
+    """
+
+    def __init__(self, xp, yp):
+        xp, yp = _validate_control_points(xp, yp)
+
+        self.xp = xp
+        self.yp = yp
+
+        # self.slopes = np.zeros_like(yp)
+        self.slopes = BEZIER_SLOPE_FACTOR * self._estimate_slopes(xp, yp)
+        # self.slopes = _limit_slopes_no_overshoot(xp, yp, self._estimate_slopes(xp, yp))
+
+    @staticmethod
+    def _estimate_slopes(xp, yp):
+        m = np.zeros_like(yp)
+
+        m[0] = (yp[1] - yp[0]) / (xp[1] - xp[0])
+        m[-1] = (yp[-1] - yp[-2]) / (xp[-1] - xp[-2])
+
+        for i in range(1, len(xp) - 1):
+            m[i] = (
+                (yp[i + 1] - yp[i - 1])
+                / (xp[i + 1] - xp[i - 1])
+            )
+
+        return m
+
+    def __call__(self, x):
+        return self._eval(x, derivative_order=0)
+
+    def derivative(self, order: int = 1):
+        return lambda x: self._eval(x, derivative_order=order)
+
+    def _eval(self, x, derivative_order=0):
+        x_arr, scalar_input = _as_array_keep_scalar(x)
+        out = np.zeros_like(x_arr, dtype=float)
+
+        for i in range(len(self.xp) - 1):
+            x0 = self.xp[i]
+            x1 = self.xp[i + 1]
+
+            y0 = self.yp[i]
+            y1 = self.yp[i + 1]
+
+            m0 = self.slopes[i]
+            m1 = self.slopes[i + 1]
+
+            h = x1 - x0
+
+            if i == 0:
+                mask = (x_arr >= x0) & (x_arr <= x1)
+            else:
+                mask = (x_arr > x0) & (x_arr <= x1)
+
+            if not np.any(mask):
+                continue
+
+            xx = x_arr[mask]
+            t = (xx - x0) / h
+
+            # Bézier control points
+            p0 = y0
+            p1 = y0 + m0 * h / 3.0
+            p2 = y1 - m1 * h / 3.0
+            p3 = y1
+
+            if derivative_order == 0:
+                out[mask] = (
+                    (1 - t)**3 * p0
+                    + 3 * (1 - t)**2 * t * p1
+                    + 3 * (1 - t) * t**2 * p2
+                    + t**3 * p3
+                )
+
+            elif derivative_order == 1:
+                dy_dt = (
+                    3 * (1 - t)**2 * (p1 - p0)
+                    + 6 * (1 - t) * t * (p2 - p1)
+                    + 3 * t**2 * (p3 - p2)
+                )
+
+                out[mask] = dy_dt / h
+
+            elif derivative_order == 2:
+                d2y_dt2 = (
+                    6 * (1 - t) * (p2 - 2*p1 + p0)
+                    + 6 * t * (p3 - 2*p2 + p1)
+                )
+
+                out[mask] = d2y_dt2 / h**2
+
+            elif derivative_order == 3:
+                d3y_dt3 = 6 * (
+                    p3 - 3*p2 + 3*p1 - p0
+                )
+
+                out[mask] = d3y_dt3 / h**3
+
+            else:
+                out[mask] = 0.0
+
+        return _return_scalar_if_needed(out, scalar_input)
+
+
+def build_piecewise_bezier_spline(
+    xp,
+    yp,
+) -> PiecewiseBezierSpline:
+    return PiecewiseBezierSpline(xp, yp)
+
 
 # ============================================================
 # ACTIVE SPLINE DISPATCHER
@@ -417,29 +670,17 @@ def build_active_spline(xp, yp):
             return build_hermite_spline(xp, yp)
         case "smoothstep":
             return build_smoothstep_spline(xp, yp)
+        case "parabola_ends_smoothstep_middle":
+            return build_parabola_ends_smoothstep_middle_spline(xp, yp)
+        case "piecewise_bezier":
+            return build_piecewise_bezier_spline(xp, yp)
         case _:
             raise ValueError(
                 f"Unknown SPLINE_VARIANT={SPLINE_VARIANT!r}. "
                 "Use: pchip, pchip_smoothed, pchip_smoothed_amplified, "
-                "piecewise_parabola, piecewise_hermite, smoothstep."
+                "piecewise_parabola, piecewise_hermite, smoothstep, piecewise_bezier."
             )
 
-
-# Compatibility name used by the rest of the solver.
-def natural_cubic_spline_second_derivatives(xp, yp):
-    """
-    Historical compatibility wrapper.
-
-    The old version returned natural cubic second derivatives.
-    Current version returns the active spline/profile object selected by
-    SPLINE_VARIANT at the top of this file.
-    """
-    return build_active_spline(xp, yp)
-
-
-# Compatibility aliases. They now respect SPLINE_VARIANT through build_active_spline()
-# only when called via natural_cubic_spline_second_derivatives(); direct calls build
-# their explicit named variant.
 
 
 # ============================================================
@@ -743,8 +984,6 @@ def prestress_loads_from_spline(
     Returns:
         q_elements, nodal_loads
 
-    Use it in debug scripts when you want to switch both spline type and
-    equivalent prestress load method from this file.
     """
     selected = load_variant or PRESTRESS_LOAD_VARIANT
     x_nodes = np.asarray(x_nodes, dtype=float)

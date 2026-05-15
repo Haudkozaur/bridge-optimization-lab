@@ -4,6 +4,7 @@ bin/
 obj/
 *.user
 *.suo
+*.lscache
 
 # Python
 __pycache__/

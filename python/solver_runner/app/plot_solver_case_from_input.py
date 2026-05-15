@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from solver_runner.opensees.spline import (
-    natural_cubic_spline_second_derivatives,
+    build_active_spline,
     prestress_distributed_load_from_spline,
     prestress_end_loads_from_spline,
     prestress_element_nodal_loads_from_spline,
@@ -20,14 +20,20 @@ from solver_runner.opensees.spline import (
 from solver_runner.opensees.two_span_solver import run_case
 
 
+# DEFAULT_INPUT_CSV = (
+#     PROJECT_ROOT
+#     / "model_inputs"
+#     / "prepared_inputs"
+#     / "20260515_104115"
+#     / "input.csv"
+# )
 DEFAULT_INPUT_CSV = (
     PROJECT_ROOT
     / "model_inputs"
     / "prepared_inputs"
-    / "20260515_104115"
+    / "test"
     / "input.csv"
 )
-
 
 PRINT_CHOICES = [
     "all",
@@ -55,6 +61,7 @@ PLOT_CHOICES = [
     "moments-opensees",
     "moments-compare",
     "reactions",
+    "profile-simplified",
 ]
 
 
@@ -288,8 +295,8 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
     L_right = to_float(row, "right_span_length_m")
     L_total = L_left + L_right
 
-    n_div_left = to_int(row, "left_beam_divisions")
-    n_div_right = to_int(row, "right_beam_divisions")
+    n_div_left = to_int(row, "left_beam_divisions")*6
+    n_div_right = to_int(row, "right_beam_divisions")*6
     n_div = n_div_left + n_div_right
     dx = L_total / (n_div)
 
@@ -324,7 +331,7 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
         to_float(row, "tendon_ecc_right_m"),
     ])
 
-    spline_m = natural_cubic_spline_second_derivatives(
+    spline_m = build_active_spline(
         tendon_x,
         tendon_e,
     )
@@ -394,11 +401,11 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
         )
     )
 
-    q_total_old_elements = (
-        q_ps_elements
-        + q_udl_elements
-        + q_sw_elements
-    )
+    # q_total_old_elements = (
+    #     q_ps_elements
+    #     + q_udl_elements
+    #     + q_sw_elements
+    # )
 
     q_total_angle_elements = (
         q_ps_angle_elements
@@ -407,12 +414,12 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
     )
 
     case_specs = [
-        (
-            "ps-old",
-            "PS old: q curvature + end loads",
-            q_ps_elements,
-            prestress_old_nodal_loads,
-        ),
+        # (
+        #     "ps-old",
+        #     "PS old: q curvature + end loads",
+        #     q_ps_elements,
+        #     prestress_old_nodal_loads,
+        # ),
         (
             "ps-v3",
             "PS v3: q angle + nodal moments",
@@ -431,12 +438,12 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
             q_sw_elements,
             None,
         ),
-        (
-            "total-old",
-            "Total old: q curvature + end loads",
-            q_total_old_elements,
-            prestress_old_nodal_loads,
-        ),
+        # (
+        #     "total-old",
+        #     "Total old: q curvature + end loads",
+        #     q_total_old_elements,
+        #     prestress_old_nodal_loads,
+        # ),
         (
             "total-v3",
             "Total v3: q angle + nodal moments",
@@ -650,6 +657,52 @@ def plot_profile(data):
     plt.grid(True)
     plt.legend()
 
+
+def plot_profile_simplified(data):
+    x_plot = np.linspace(0.0, data["L_total"], 500)
+
+    y_plot, _, _ = spline_y_yd_ydd(
+        x_plot,
+        data["tendon_x"],
+        data["tendon_e"],
+        data["spline_m"],
+    )
+
+    plt.figure()
+
+    plt.plot(
+        x_plot,
+        y_plot,
+        linewidth=2.0,
+        label="Tendon profile",
+    )
+
+    plt.scatter(
+        data["tendon_x"],
+        data["tendon_e"],
+        zorder=3,
+        label="Control points",
+    )
+
+    plt.axhline(
+        0.0,
+        linewidth=0.8,
+        label="Beam axis",
+    )
+
+    plt.axvline(
+        data["L_left"],
+        linestyle="--",
+        linewidth=0.8,
+        label="Middle support",
+    )
+
+    plt.xlabel("x [m]")
+    plt.ylabel("eccentricity e [m]")
+    plt.title(f"Simplified tendon eccentricity profile | model {data['model_index']}")
+    plt.xlim(0.0, data["L_total"])
+    plt.grid(True)
+    plt.legend()
 
 def plot_q_old(data, annotate_enabled):
     x_plot = np.linspace(0.0, data["L_total"], 500)
@@ -919,6 +972,8 @@ def plot_reactions(data):
 def run_plots(data, selected_plots, annotate_enabled):
     if wants(selected_plots, "profile"):
         plot_profile(data)
+    if wants(selected_plots, "profile-simplified"):
+        plot_profile_simplified(data)
 
     if wants(selected_plots, "q-old"):
         plot_q_old(data, annotate_enabled)
@@ -951,9 +1006,9 @@ def main():
     USE_HARDCODED_DEBUG = True
 
     if USE_HARDCODED_DEBUG:
-        args.model = 2
-        args.cases = ["ps-v3"]
-        args.plots = ["moments"]
+        args.model = 34
+        args.cases = ["all"]
+        args.plots = ["moments", "profile-simplified", "reactions"]
         args.prints = ["moments"]
 
     print("DEBUG ARGS:", args)

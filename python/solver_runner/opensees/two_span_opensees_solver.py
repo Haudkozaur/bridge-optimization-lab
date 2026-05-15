@@ -1,7 +1,7 @@
 import numpy as np
 
 from solver_runner.opensees.spline import (
-    natural_cubic_spline_second_derivatives,
+    build_active_spline,
     prestress_element_q_and_moment_loads_from_spline,
 )
 
@@ -49,7 +49,7 @@ class TwoSpanOpenSeesSolver:
             sampled["tendon_ecc_right_m"],
         ])
 
-        spline_m = natural_cubic_spline_second_derivatives(
+        spline_m = build_active_spline(
             tendon_x,
             tendon_e,
         )

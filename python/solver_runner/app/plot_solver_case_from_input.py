@@ -15,25 +15,27 @@ from solver_runner.opensees.spline import (
     prestress_end_loads_from_spline,
     prestress_element_nodal_loads_from_spline,
     prestress_element_q_and_moment_loads_from_spline,
+    prestress_midas_segment_equilibrium_loads_from_spline,
+    prestress_midas_segment_equilibrium_quarter_linearized_loads_from_spline,
     spline_y_yd_ydd,
 )
 from solver_runner.opensees.two_span_solver import run_case
 
 
-# DEFAULT_INPUT_CSV = (
-#     PROJECT_ROOT
-#     / "model_inputs"
-#     / "prepared_inputs"
-#     / "20260515_104115"
-#     / "input.csv"
-# )
 DEFAULT_INPUT_CSV = (
     PROJECT_ROOT
     / "model_inputs"
     / "prepared_inputs"
-    / "test"
+    / "20260519_234417"
     / "input.csv"
 )
+# DEFAULT_INPUT_CSV = (
+#     PROJECT_ROOT
+#     / "model_inputs"
+#     / "prepared_inputs"
+#     / "test"
+#     / "input.csv"
+# )
 
 PRINT_CHOICES = [
     "all",
@@ -45,6 +47,8 @@ PRINT_CHOICES = [
     "loads-old",
     "loads-new",
     "loads-v3",
+    "loads-midas",
+    "loads-midas-quarter",
     "opensees-forces",
     "jumps",
 ]
@@ -62,6 +66,7 @@ PLOT_CHOICES = [
     "moments-compare",
     "reactions",
     "profile-simplified",
+    "profile-simplified-bezier",
 ]
 
 
@@ -110,10 +115,14 @@ def parse_args():
             "all",
             "ps-old",
             "ps-v3",
+            "ps-midas",
+            "ps-midas-quarter",
             "udl",
             "sw",
             "total-old",
             "total-v3",
+            "total-midas",
+            "total-midas-quarter",
         ],
         help="Cases to run/plot/print",
     )
@@ -295,8 +304,8 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
     L_right = to_float(row, "right_span_length_m")
     L_total = L_left + L_right
 
-    n_div_left = to_int(row, "left_beam_divisions")*6
-    n_div_right = to_int(row, "right_beam_divisions")*6
+    n_div_left = to_int(row, "left_beam_divisions")
+    n_div_right = to_int(row, "right_beam_divisions")
     n_div = n_div_left + n_div_right
     dx = L_total / (n_div)
 
@@ -401,6 +410,28 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
         )
     )
 
+    q_ps_midas_elements, prestress_midas_segment_loads = (
+        prestress_midas_segment_equilibrium_loads_from_spline(
+            x_nodes=x_nodes,
+            xp=tendon_x,
+            yp=tendon_e,
+            spline_m=spline_m,
+            prestress_force=P_total,
+        )
+    )
+
+    q_ps_midas_quarter_elements, prestress_midas_quarter_loads = (
+        prestress_midas_segment_equilibrium_quarter_linearized_loads_from_spline(
+            x_nodes=x_nodes,
+            xp=tendon_x,
+            yp=tendon_e,
+            spline_m=spline_m,
+            prestress_force=P_total,
+            left_divs=n_div_left,
+            right_divs=n_div_right,
+        )
+    )
+
     # q_total_old_elements = (
     #     q_ps_elements
     #     + q_udl_elements
@@ -409,6 +440,18 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
 
     q_total_angle_elements = (
         q_ps_angle_elements
+        + q_udl_elements
+        + q_sw_elements
+    )
+
+    q_total_midas_elements = (
+        q_ps_midas_elements
+        + q_udl_elements
+        + q_sw_elements
+    )
+
+    q_total_midas_quarter_elements = (
+        q_ps_midas_quarter_elements
         + q_udl_elements
         + q_sw_elements
     )
@@ -425,6 +468,18 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
             "PS v3: q angle + nodal moments",
             q_ps_angle_elements,
             prestress_angle_moment_loads,
+        ),
+        (
+            "ps-midas",
+            "PS MIDAS-like: segment equilibrium",
+            q_ps_midas_elements,
+            prestress_midas_segment_loads,
+        ),
+        (
+            "ps-midas-quarter",
+            "PS MIDAS-like: quarter-linearized segment equilibrium",
+            q_ps_midas_quarter_elements,
+            prestress_midas_quarter_loads,
         ),
         (
             "udl",
@@ -449,6 +504,18 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
             "Total v3: q angle + nodal moments",
             q_total_angle_elements,
             prestress_angle_moment_loads,
+        ),
+        (
+            "total-midas",
+            "Total MIDAS-like: segment equilibrium",
+            q_total_midas_elements,
+            prestress_midas_segment_loads,
+        ),
+        (
+            "total-midas-quarter",
+            "Total MIDAS-like: quarter-linearized segment equilibrium",
+            q_total_midas_quarter_elements,
+            prestress_midas_quarter_loads,
         ),
     ]
 
@@ -515,6 +582,10 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
 
         "q_ps_angle_elements": q_ps_angle_elements,
         "prestress_angle_moment_loads": prestress_angle_moment_loads,
+        "q_ps_midas_elements": q_ps_midas_elements,
+        "prestress_midas_segment_loads": prestress_midas_segment_loads,
+        "q_ps_midas_quarter_elements": q_ps_midas_quarter_elements,
+        "prestress_midas_quarter_loads": prestress_midas_quarter_loads,
 
         "cases": cases,
     }
@@ -533,6 +604,36 @@ def run_prints(data, selected_prints):
         dx = data["dx"]
 
         print("=== V3 Q ANGLE LOADS ===")
+        print(f"q min = {q.min():.6f} kN/m")
+        print(f"q max = {q.max():.6f} kN/m")
+        print(f"sum(q * dx) = {np.sum(q) * dx:.6f} kN")
+        print()
+
+    if wants(selected_prints, "loads-midas"):
+        print_load_summary(
+            "MIDAS-LIKE LOADS: segment equilibrium",
+            data["prestress_midas_segment_loads"],
+        )
+
+        q = data["q_ps_midas_elements"]
+        dx = data["dx"]
+
+        print("=== MIDAS-LIKE Q LOADS ===")
+        print(f"q min = {q.min():.6f} kN/m")
+        print(f"q max = {q.max():.6f} kN/m")
+        print(f"sum(q * dx) = {np.sum(q) * dx:.6f} kN")
+        print()
+
+    if wants(selected_prints, "loads-midas-quarter"):
+        print_load_summary(
+            "MIDAS-LIKE QUARTER-LINEARIZED LOADS: segment equilibrium",
+            data["prestress_midas_quarter_loads"],
+        )
+
+        q = data["q_ps_midas_quarter_elements"]
+        dx = data["dx"]
+
+        print("=== MIDAS-LIKE QUARTER-LINEARIZED Q LOADS ===")
         print(f"q min = {q.min():.6f} kN/m")
         print(f"q max = {q.max():.6f} kN/m")
         print(f"sum(q * dx) = {np.sum(q) * dx:.6f} kN")
@@ -704,6 +805,169 @@ def plot_profile_simplified(data):
     plt.grid(True)
     plt.legend()
 
+def plot_profile_simplified_bezier(data):
+    x_plot = np.linspace(0.0, data["L_total"], 500)
+    spline = data["spline_m"]
+
+    y_plot, _, _ = spline_y_yd_ydd(
+        x_plot,
+        data["tendon_x"],
+        data["tendon_e"],
+        spline,
+    )
+
+    plt.figure(figsize=(14, 6))
+
+    plt.plot(
+        x_plot,
+        y_plot,
+        linewidth=2.5,
+        label="Tendon profile",
+        zorder=10,
+    )
+
+    plt.scatter(
+        data["tendon_x"],
+        data["tendon_e"],
+        s=100,
+        color="red",
+        zorder=11,
+        label="Real tendon points",
+    )
+
+    if hasattr(spline, "control_points_1") and hasattr(spline, "control_points_2"):
+        for i in range(len(spline.xp) - 1):
+            P0 = np.array([spline.xp[i], spline.yp[i]])
+            P3 = np.array([spline.xp[i + 1], spline.yp[i + 1]])
+
+            V = P3 - P0
+            L = np.linalg.norm(V)
+
+            if L < 1.0e-12:
+                continue
+
+            unit_V = V / L
+            normal_V = np.array([-unit_V[1], unit_V[0]])
+
+            base_C1 = P0 + (1.0 / 3.0) * V
+            base_C2 = P0 + (2.0 / 3.0) * V
+
+            c1 = spline.control_points_1[i]
+            c2 = spline.control_points_2[i]
+                        # =====================================================
+            # DEBUG INFO
+            # =====================================================
+
+            dy = P3[1] - P0[1]
+            dx = P3[0] - P0[0]
+
+            angle_deg = np.degrees(np.arctan2(dy, dx))
+            abs_angle_deg = abs(angle_deg)
+
+            angle_to_vertical_deg = 90.0 - abs_angle_deg
+
+            # Signed distances from chord
+            signed_c1 = np.cross(V, c1 - base_C1) / L
+            signed_c2 = np.cross(V, c2 - base_C2) / L
+
+            # Real perpendicular distances
+            dist_c1 = abs(signed_c1)
+            dist_c2 = abs(signed_c2)
+
+            # Signs relative to segment normal
+            sign_c1 = np.sign(signed_c1)
+            sign_c2 = np.sign(signed_c2)
+
+            print(
+                f"segment {i+1} | "
+                f"P{i+1}->P{i+2} | "
+                f"dy={dy:+.4f} | "
+                f"angle={angle_deg:+.3f} deg | "
+                f"|angle|={abs_angle_deg:.3f} deg | "
+                f"vertical_angle={angle_to_vertical_deg:.3f} deg | "
+                f"signs=({sign_c1:+.0f}, {sign_c2:+.0f}) | "
+                f"distances=({dist_c1:.4f}, {dist_c2:.4f})"
+            )
+            for base, ctrl, label_suffix in [
+                (base_C1, c1, "C1"),
+                (base_C2, c2, "C2"),
+            ]:
+                plt.plot(
+                    [base[0], ctrl[0]],
+                    [base[1], ctrl[1]],
+                    color="gray",
+                    linestyle="--",
+                    linewidth=0.8,
+                    zorder=2,
+                )
+
+                plt.scatter(
+                    ctrl[0],
+                    ctrl[1],
+                    marker="x",
+                    s=80,
+                    color=(
+                    "green"
+                    if np.sign(np.cross(V, ctrl - base)) >= 0.0
+                    else "purple"
+                ),
+                    zorder=12,
+                )
+
+                plt.text(
+                    ctrl[0],
+                    ctrl[1] + 0.05,
+                    f"{label_suffix}({ctrl[0]:.2f}, {ctrl[1]:.2f})",
+                    fontsize=8,
+                    ha="center",
+                    bbox=dict(
+                        facecolor="white",
+                        alpha=0.6,
+                        edgecolor="none",
+                    ),
+                )
+
+            plt.plot(
+                [P0[0], c1[0], c2[0], P3[0]],
+                [P0[1], c1[1], c2[1], P3[1]],
+                linestyle=":",
+                linewidth=1.0,
+                color="orange",
+                alpha=0.5,
+                zorder=1,
+            )
+    else:
+        print(
+            "Selected spline has no control_points_1/control_points_2. "
+            "Bezier guide plot will show only tendon profile."
+        )
+
+    plt.axhline(
+        0.0,
+        color="black",
+        linewidth=0.8,
+        label="Beam axis",
+    )
+
+    plt.axvline(
+        data["L_left"],
+        linestyle="--",
+        color="blue",
+        linewidth=0.8,
+        label="Middle support",
+    )
+
+    plt.xlabel("x [m]")
+    plt.ylabel("eccentricity e [m]")
+    plt.title(
+        f"Simplified Bézier tendon profile with perpendicular guides | model {data['model_index']}"
+    )
+
+    plt.xlim(-0.5, data["L_total"] + 0.5)
+    plt.grid(True, alpha=0.3)
+    plt.legend(loc="upper right")
+    plt.gca().set_aspect("auto")
+
 def plot_q_old(data, annotate_enabled):
     x_plot = np.linspace(0.0, data["L_total"], 500)
     _, yd_plot, ydd_plot = spline_y_yd_ydd(
@@ -803,7 +1067,12 @@ def plot_moments_curvature(data, annotate_enabled):
         x = case["x"]
         M = -case["M"]
 
-        plt.plot(x, M, label=case["name"])
+        x, M = collapse_duplicate_x_values(x, M, mode="mean")
+
+        x_plot = np.linspace(x.min(), x.max(), 500)
+        M_plot = np.interp(x_plot, x, M)
+
+        plt.plot(x_plot, M_plot, label=case["name"])
         maybe_annotate(x, M, annotate_enabled)
 
     plt.axhline(0.0, linewidth=0.8)
@@ -813,15 +1082,14 @@ def plot_moments_curvature(data, annotate_enabled):
     plt.title("Bending moments from curvature recovery")
     plt.grid(True)
     plt.legend()
-
-
+    
 def plot_moments_opensees(data, annotate_enabled):
     plt.figure()
 
     for case in data["cases"]:
         x = case["x_ops"]
         M = -case["M_ops"]
-
+        x, M = collapse_duplicate_x_values(x, M, mode="mean")
         plt.plot(x, M, label=f"{case['name']} | OpenSees eleForce")
         maybe_annotate(x, M, annotate_enabled)
 
@@ -838,23 +1106,39 @@ def plot_moments_compare(data, annotate_enabled):
     plt.figure()
 
     for case in data["cases"]:
+
+        # curvature recovery
+        x_curv = case["x"]
+        M_curv = -case["M"]
+
+        # OpenSees raw
+        x_ops = case["x_ops"]
+        M_ops = -case["M_ops"]
+
+        # collapse duplicated node values
+        x_ops, M_ops = collapse_duplicate_x_values(
+            x_ops,
+            M_ops,
+            mode="mean",   # albo "absmax"
+        )
+
         plt.plot(
-            case["x"],
-            -case["M"],
+            x_curv,
+            M_curv,
             label=f"{case['name']} | curvature",
         )
 
         plt.plot(
-            case["x_ops"],
-            -case["M_ops"],
+            x_ops,
+            M_ops,
             "--",
             linewidth=2,
             label=f"{case['name']} | OpenSees eleForce",
         )
 
         if annotate_enabled:
-            annotate_min_max(case["x"], -case["M"])
-            annotate_min_max(case["x_ops"], -case["M_ops"])
+            annotate_min_max(x_curv, M_curv)
+            annotate_min_max(x_ops, M_ops)
 
     plt.axhline(0.0, linewidth=0.8)
     plt.axvline(data["L_left"], linestyle="--", linewidth=0.8)
@@ -972,8 +1256,12 @@ def plot_reactions(data):
 def run_plots(data, selected_plots, annotate_enabled):
     if wants(selected_plots, "profile"):
         plot_profile(data)
+
     if wants(selected_plots, "profile-simplified"):
         plot_profile_simplified(data)
+
+    if wants(selected_plots, "profile-simplified-bezier"):
+        plot_profile_simplified_bezier(data)
 
     if wants(selected_plots, "q-old"):
         plot_q_old(data, annotate_enabled)
@@ -999,6 +1287,31 @@ def run_plots(data, selected_plots, annotate_enabled):
     if wants(selected_plots, "reactions"):
         plot_reactions(data)
 
+def collapse_duplicate_x_values(x, y, mode="mean"):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    unique_x = []
+    collapsed_y = []
+
+    for ux in np.unique(x):
+        values = y[np.isclose(x, ux)]
+
+        if mode == "mean":
+            selected = float(np.mean(values))
+        elif mode == "absmax":
+            selected = float(values[np.argmax(np.abs(values))])
+        elif mode == "min":
+            selected = float(np.min(values))
+        elif mode == "max":
+            selected = float(np.max(values))
+        else:
+            raise ValueError(f"Unknown collapse mode: {mode}")
+
+        unique_x.append(float(ux))
+        collapsed_y.append(selected)
+
+    return np.array(unique_x), np.array(collapsed_y)
 
 def main():
     args = parse_args()
@@ -1006,9 +1319,9 @@ def main():
     USE_HARDCODED_DEBUG = True
 
     if USE_HARDCODED_DEBUG:
-        args.model = 34
-        args.cases = ["all"]
-        args.plots = ["moments", "profile-simplified", "reactions"]
+        args.model = 113
+        args.cases = ["ps-midas-quarter"]
+        args.plots = ["moments", "profile-simplified-bezier"]
         args.prints = ["moments"]
 
     print("DEBUG ARGS:", args)

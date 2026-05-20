@@ -46,7 +46,7 @@ class SolverBatchRunner:
         for row_index, sampled in enumerate(self.input_reader.iter_rows(), start=1):
             model_index = int(sampled.get("model_index") or row_index)
 
-            print(f"\n--- Running OpenSees solver model {model_index} ---")
+            print(f"--- Running OpenSees solver model {model_index} ---")
 
             try:
                 results = self.solver.solve(sampled)

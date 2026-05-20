@@ -17,11 +17,11 @@ def main():
     input_path = run_dir / "input.csv"
 
     cfg = ExperimentConfig(
-        n_models=10, 
+        n_models=200, 
         model_type=Model_Type.TWO_SPAN_POST_TENSIONED_BEAM,
         random_seed=None,
         save_inputs=True,
-        save_analysis_status=False,
+        # save_analysis_status=False,
         results_to_save=["deflections_dz"],
         output_csv_path=str(input_path),
         output_model_dir=str(run_dir),

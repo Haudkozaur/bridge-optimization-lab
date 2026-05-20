@@ -19,7 +19,7 @@ def main():
         PYTHON_ROOT
         / "model_inputs"
         / "prepared_inputs"
-        / "20260515_104115"
+        / "20260519_234417"
         / "input.csv"
     )
 
@@ -46,7 +46,7 @@ def main():
             "deflections_dz",
             "moments_my",
             "reactions_fz",
-        ],
+        ],7
         output_csv_path=str(output_path),
         output_model_dir=str(run_dir),
     )

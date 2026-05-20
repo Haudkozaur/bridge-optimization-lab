@@ -3,6 +3,7 @@ import numpy as np
 from solver_runner.opensees.spline import (
     build_active_spline,
     prestress_element_q_and_moment_loads_from_spline,
+    prestress_loads_from_spline,
 )
 
 from solver_runner.opensees.two_span_solver import run_case
@@ -66,7 +67,7 @@ class TwoSpanOpenSeesSolver:
         # ============================================================
 
         q_ps_elements, prestress_nodal_loads = (
-            prestress_element_q_and_moment_loads_from_spline(
+            prestress_loads_from_spline(
                 x_nodes=x_nodes,
                 xp=tendon_x,
                 yp=tendon_e,

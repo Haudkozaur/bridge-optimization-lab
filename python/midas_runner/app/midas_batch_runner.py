@@ -9,44 +9,72 @@ from midas_civil import *
 from common.io.csv_reader import CsvReader
 from common.io.csv_writer import CsvWriter
 
-from model_inputs.configs.experiment_config import ExperimentConfig, Model_Type
-from midas_runner.builders.two_span_post_tensioned_midas_builder import (
-    TwoSpanPostTensionedMidasBuilder,
-)
+from common.model_types import Model_Type
+from configs.midas_run_config import MidasRunConfig
+
 
 from model_inputs.generators.two_span_post_tensioned_input_generator import (
     TwoSpanPostTensionedInputGenerator,
 )
+from model_inputs.generators.multi_span_beam_input_generator import (
+    MultiSpanBeamInputGenerator,
+)
+
+from model_inputs.configs.experiment_inputs_config import (
+    TwoSpanPostTensionedBeamConfig,
+    MultiSpanBeamConfig,
+)
+
+from midas_runner.builders.two_span_post_tensioned_midas_builder import (
+    TwoSpanPostTensionedMidasBuilder,
+)
+from midas_runner.builders.multi_span_beam_midas_builder import (
+    MultiSpanBeamMidasBuilder,
+)
 
 from midas_runner.app.result_collector import ResultCollector
-from midas_runner.app.config import config as app_config
+from midas_runner.app.api_config import config as app_config
 
 
 
 class MidasBatchRunner:
-    def __init__(self, config: ExperimentConfig, input_csv_path: str):
+    def __init__(self, config: MidasRunConfig, input_csv_path: str):
         self.config = config
         self.config.validate()
 
         self.input_csv_path = input_csv_path
         self.rng = random.Random(self.config.random_seed)
 
-
-
         match self.config.model_type:
             case Model_Type.TWO_SPAN_POST_TENSIONED_BEAM:
+                model_config = TwoSpanPostTensionedBeamConfig()
+
                 self.input_generator = TwoSpanPostTensionedInputGenerator(
-                    config=self.config.model_config,
+                    config=model_config,
                     rng=self.rng,
                 )
 
                 self.model_builder = TwoSpanPostTensionedMidasBuilder(
-                    config=self.config.model_config,
+                    config=model_config,
                     rng=self.rng,
                 )
+
+            case Model_Type.MULTI_SPAN_BEAM:
+                model_config = MultiSpanBeamConfig()
+
+                self.input_generator = MultiSpanBeamInputGenerator(
+                    config=model_config,
+                    rng=self.rng,
+                )
+
+                self.model_builder = MultiSpanBeamMidasBuilder(
+                    config=model_config,
+                    rng=self.rng,
+                )
+
             case _:
                 raise ValueError(f"Unsupported model_type: {self.config.model_type}")
-            
+
         self.max_node_id = self.input_generator.get_max_node_id()
         input_columns = self.input_generator.input_field_order()
 
@@ -58,11 +86,10 @@ class MidasBatchRunner:
         )
         self.result_collector = ResultCollector(self.config)
 
-
     def run(self) -> None:
         self._initialize_midas()
         self._ensure_output_dir()
-        input_copy_path = Path(self.config.output_model_dir) / "input_used.csv"
+        self._copy_input_csv_to_output_dir()
 
         for row_index, sampled in enumerate(self.input_reader.iter_rows(), start=1):
             model_index = int(sampled.get("model_index") or row_index)
@@ -109,7 +136,6 @@ class MidasBatchRunner:
         print(f"\nDone. MIDAS results saved to: {self.config.output_csv_path}")
 
     def _copy_input_csv_to_output_dir(self) -> None:
-        
         input_copy_path = Path(self.config.output_model_dir) / "input_used.csv"
 
         if not input_copy_path.exists():

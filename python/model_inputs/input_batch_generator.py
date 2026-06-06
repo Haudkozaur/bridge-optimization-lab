@@ -1,19 +1,23 @@
 import random
 
-from model_inputs.configs.experiment_config import ExperimentConfig, Model_Type
+from common.model_types import Model_Type
+from model_inputs.configs.experiment_inputs_config import ExperimentInputsConfig
 from model_inputs.generators.two_span_post_tensioned_input_generator import (
     TwoSpanPostTensionedInputGenerator,
+)
+from model_inputs.generators.multi_span_beam_input_generator import (
+    MultiSpanBeamInputGenerator,
 )
 from common.io.csv_writer import CsvWriter
 
 
 class InputBatchGenerator:
-    def __init__(self, config: ExperimentConfig):
+    def __init__(self, config: ExperimentInputsConfig):
         self.config = config
         self.config.validate()
 
         self.rng = random.Random(self.config.random_seed)
-        self.writer = CsvWriter(self.config.output_csv_path)
+        self.writer = CsvWriter(self.config.input_csv_path)
 
         match self.config.model_type:
             case Model_Type.TWO_SPAN_POST_TENSIONED_BEAM:
@@ -21,6 +25,13 @@ class InputBatchGenerator:
                     config=self.config.model_config,
                     rng=self.rng,
                 )
+
+            case Model_Type.MULTI_SPAN_BEAM:
+                self.model_generator = MultiSpanBeamInputGenerator(
+                    config=self.config.model_config,
+                    rng=self.rng,
+                )
+
             case _:
                 raise ValueError(
                     f"Input generation not supported yet for: {self.config.model_type}"
@@ -50,5 +61,5 @@ class InputBatchGenerator:
             preferred_order=preferred_order,
         )
 
-        print(f"Input CSV saved to: {self.config.output_csv_path}")
+        print(f"Input CSV saved to: {self.config.input_csv_path}")
         print(f"Rows: {len(rows)}")

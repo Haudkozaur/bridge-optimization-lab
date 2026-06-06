@@ -1,11 +1,10 @@
 from random import Random
 
-from model_inputs.configs.experiment_config import (
-    Model_Type,
+from model_inputs.configs.experiment_inputs_config import (
     TwoSpanPostTensionedBeamConfig,
 )
 from common.ranges import FloatRange
-
+from common.model_types import Model_Type
 
 class TwoSpanPostTensionedInputGenerator:
     def __init__(self, config: TwoSpanPostTensionedBeamConfig, rng: Random):

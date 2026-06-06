@@ -6,10 +6,8 @@ sys.path.insert(0, str(PYTHON_ROOT))
 
 from datetime import datetime
 
-from model_inputs.configs.experiment_config import (
-    ExperimentConfig,
-    Model_Type,
-)
+from common.model_types import Model_Type
+from configs.midas_run_config import MidasRunConfig
 
 from midas_runner.app.midas_batch_runner import MidasBatchRunner
 
@@ -19,7 +17,7 @@ def main():
         PYTHON_ROOT
         / "model_inputs"
         / "prepared_inputs"
-        / "20260519_234417"
+        / "20260605_181003"
         / "input.csv"
     )
 
@@ -36,17 +34,15 @@ def main():
 
     output_path = run_dir / "midas_output.csv"
 
-    cfg = ExperimentConfig(
-        n_models=100,
-        model_type=Model_Type.TWO_SPAN_POST_TENSIONED_BEAM,
-        random_seed=None,
+    cfg = MidasRunConfig(
+        model_type=Model_Type.MULTI_SPAN_BEAM,
         save_inputs=True,
         save_analysis_status=True,
         results_to_save=[
             "deflections_dz",
             "moments_my",
             "reactions_fz",
-        ],7
+        ],
         output_csv_path=str(output_path),
         output_model_dir=str(run_dir),
     )

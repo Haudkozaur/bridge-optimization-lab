@@ -5,10 +5,14 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import openseespy.opensees as ops
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from solver_runner.opensees.internal_forces_calculator import (
+    recover_element_forces_from_curvature,
+)
 from solver_runner.opensees.spline import (
     build_active_spline,
     prestress_distributed_load_from_spline,
@@ -19,23 +23,15 @@ from solver_runner.opensees.spline import (
     prestress_midas_segment_equilibrium_quarter_linearized_loads_from_spline,
     spline_y_yd_ydd,
 )
-from solver_runner.opensees.two_span_solver import run_case
 
 
 DEFAULT_INPUT_CSV = (
     PROJECT_ROOT
     / "model_inputs"
     / "prepared_inputs"
-    / "20260519_234417"
+    / "20260605_181003"
     / "input.csv"
 )
-# DEFAULT_INPUT_CSV = (
-#     PROJECT_ROOT
-#     / "model_inputs"
-#     / "prepared_inputs"
-#     / "test"
-#     / "input.csv"
-# )
 
 PRINT_CHOICES = [
     "all",
@@ -69,10 +65,29 @@ PLOT_CHOICES = [
     "profile-simplified-bezier",
 ]
 
+CASE_CHOICES = [
+    "all",
+    "ps-old",
+    "ps-v3",
+    "ps-midas",
+    "ps-midas-quarter",
+    "udl",
+    "sw",
+    "total-old",
+    "total-v3",
+    "total-midas",
+    "total-midas-quarter",
+]
+
+
+# ============================================================
+# CLI / basic helpers
+# ============================================================
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Debug one OpenSees two-span solver case from input.csv"
+        description="Debug one OpenSees multi-span solver case from input.csv"
     )
 
     parser.add_argument(
@@ -85,7 +100,7 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=int,
-        default=41,
+        default=1,
         help="model_index from input.csv",
     )
 
@@ -93,7 +108,7 @@ def parse_args():
         "--print",
         dest="prints",
         nargs="*",
-        default=["summary"],
+        default=["summary", "geometry"],
         choices=PRINT_CHOICES,
         help="Debug print sections",
     )
@@ -102,7 +117,7 @@ def parse_args():
         "--plot",
         dest="plots",
         nargs="*",
-        default=["moments"],
+        default=["moments", "profile-simplified"],
         choices=PLOT_CHOICES,
         help="Plots to show",
     )
@@ -110,20 +125,8 @@ def parse_args():
     parser.add_argument(
         "--cases",
         nargs="*",
-        default=["all"],
-        choices=[
-            "all",
-            "ps-old",
-            "ps-v3",
-            "ps-midas",
-            "ps-midas-quarter",
-            "udl",
-            "sw",
-            "total-old",
-            "total-v3",
-            "total-midas",
-            "total-midas-quarter",
-        ],
+        default=["ps-midas-quarter", "udl", "sw", "total-midas-quarter"],
+        choices=CASE_CHOICES,
         help="Cases to run/plot/print",
     )
 
@@ -152,6 +155,22 @@ def to_int(row, key):
     return int(float(row[key]))
 
 
+def parse_float_list(value) -> list[float]:
+    return [
+        float(part.strip())
+        for part in str(value).split(";")
+        if part.strip()
+    ]
+
+
+def parse_int_list(value) -> list[int]:
+    return [
+        int(float(part.strip()))
+        for part in str(value).split(";")
+        if part.strip()
+    ]
+
+
 def load_model_row(input_csv: Path, model_index: int) -> dict:
     with input_csv.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -166,8 +185,14 @@ def load_model_row(input_csv: Path, model_index: int) -> dict:
 
 
 def annotate_min_max(x, y):
-    max_idx = np.argmax(y)
-    min_idx = np.argmin(y)
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    if len(x) == 0 or len(y) == 0:
+        return
+
+    max_idx = int(np.argmax(y))
+    min_idx = int(np.argmin(y))
 
     for label, idx, offset in [
         ("max", max_idx, 10),
@@ -188,126 +213,343 @@ def maybe_annotate(x, y, enabled):
         annotate_min_max(x, y)
 
 
-def print_load_summary(name, loads):
-    print(f"=== {name} ===")
-    print(f"number of nodal loads = {len(loads)}")
-    print(
-        f"sum Fx = "
-        f"{sum(load.get('Fx', 0.0) for load in loads):.6f} kN"
+# ============================================================
+# Multi-span geometry / OpenSees runner
+# ============================================================
+
+
+def build_support_x(span_lengths: list[float]) -> np.ndarray:
+    support_x = [0.0]
+    current_x = 0.0
+
+    for span_length in span_lengths:
+        current_x += float(span_length)
+        support_x.append(current_x)
+
+    return np.array(support_x, dtype=float)
+
+
+def build_multi_span_geometry(
+    span_lengths: list[float],
+    beam_divisions: list[int],
+) -> tuple[np.ndarray, list[int], np.ndarray, np.ndarray]:
+    if len(span_lengths) != len(beam_divisions):
+        raise ValueError("span_lengths and beam_divisions must have the same length")
+
+    if len(span_lengths) == 0:
+        raise ValueError("At least one span is required")
+
+    x_nodes = [0.0]
+    support_nodes = [1]
+    element_lengths = []
+    x_mid_elements = []
+
+    current_x = 0.0
+    current_node = 1
+
+    for span_length, n_div in zip(span_lengths, beam_divisions):
+        span_length = float(span_length)
+        n_div = int(n_div)
+
+        if span_length <= 0.0:
+            raise ValueError(f"span_length must be positive, got {span_length}")
+
+        if n_div <= 0:
+            raise ValueError(f"beam_divisions must be positive, got {n_div}")
+
+        dx = span_length / n_div
+
+        for _ in range(n_div):
+            x0 = current_x
+            x1 = current_x + dx
+
+            element_lengths.append(dx)
+            x_mid_elements.append(0.5 * (x0 + x1))
+
+            current_x = x1
+            current_node += 1
+            x_nodes.append(current_x)
+
+        support_nodes.append(current_node)
+
+    return (
+        np.array(x_nodes, dtype=float),
+        support_nodes,
+        np.array(element_lengths, dtype=float),
+        np.array(x_mid_elements, dtype=float),
     )
-    print(
-        f"sum Fz = "
-        f"{sum(load.get('Fz', 0.0) for load in loads):.6f} kN"
+
+
+def build_tendon_x(span_lengths: list[float]) -> np.ndarray:
+    """
+    Multi-span tendon control points:
+        span i: x0, x0+L/4, x0+L/2, x0+3L/4, x1
+    Internal support points are not duplicated.
+    Expected count: 4 * n_spans + 1.
+    """
+    points = []
+    current_x = 0.0
+
+    for i, span_length in enumerate(span_lengths):
+        span_length = float(span_length)
+        x0 = current_x
+        x1 = current_x + span_length
+
+        local_points = [
+            x0,
+            x0 + 0.25 * span_length,
+            x0 + 0.50 * span_length,
+            x0 + 0.75 * span_length,
+            x1,
+        ]
+
+        if i == 0:
+            points.extend(local_points)
+        else:
+            points.extend(local_points[1:])
+
+        current_x = x1
+
+    return np.array(points, dtype=float)
+
+
+def find_nearest_node_id(x_nodes: np.ndarray, target_x: float) -> int:
+    idx = int(np.argmin(np.abs(x_nodes - target_x)))
+    return idx + 1
+
+
+def recover_element_forces_from_opensees_multi(x_nodes: np.ndarray):
+    """
+    Reads element end forces directly from OpenSees.
+
+    For 2D elasticBeamColumn, ops.eleForce(ele_id) returns:
+        [Px_i, Py_i, Mz_i, Px_j, Py_j, Mz_j]
+    """
+    x_all = []
+    V_all = []
+    M_all = []
+
+    n_div = len(x_nodes) - 1
+
+    for ele_id in range(1, n_div + 1):
+        forces = ops.eleForce(ele_id)
+
+        py_i = forces[1]
+        mz_i = forces[2]
+
+        py_j = forces[4]
+        mz_j = forces[5]
+
+        x0 = x_nodes[ele_id - 1]
+        x1 = x_nodes[ele_id]
+
+        x_all.extend([x0, x1])
+        V_all.extend([py_i, py_j])
+        M_all.extend([mz_i, mz_j])
+
+    return (
+        np.array(x_all),
+        np.array(V_all),
+        np.array(M_all),
     )
-    print(
-        f"sum Mz = "
-        f"{sum(load.get('Mz', 0.0) for load in loads):.6f} kNm"
+
+
+def run_multi_span_case(
+    case_name: str,
+    q_elements: np.ndarray,
+    span_lengths: list[float],
+    beam_divisions: list[int],
+    E: float,
+    A: float,
+    I: float,
+    nodal_loads: list[dict] | None = None,
+):
+    ops.wipe()
+    ops.model("basic", "-ndm", 2, "-ndf", 3)
+
+    x_nodes, support_nodes, _, _ = build_multi_span_geometry(
+        span_lengths=span_lengths,
+        beam_divisions=beam_divisions,
     )
 
-    print("first 5 loads:")
-    for load in loads[:5]:
-        print(load)
+    n_div = len(x_nodes) - 1
 
-    print("last 5 loads:")
-    for load in loads[-5:]:
-        print(load)
-
-    print()
-
-
-def print_summary(cases):
-    print("=== SUMMARY ===")
-
-    for c in cases:
-        print(c["name"])
-        print(f"  R_left  = {c['R_left']:.6f} kN")
-        print(f"  R_mid   = {c['R_mid']:.6f} kN")
-        print(f"  R_right = {c['R_right']:.6f} kN")
-        print(
-            f"  sum R   = "
-            f"{c['R_left'] + c['R_mid'] + c['R_right']:.6f} kN"
+    q_elements = np.asarray(q_elements, dtype=float)
+    if len(q_elements) != n_div:
+        raise ValueError(
+            f"q_elements length={len(q_elements)} but n_div={n_div}"
         )
-        print(f"  uy left mid  = {c['uy_left_mid_mm']:.6f} mm")
-        print(f"  uy right mid = {c['uy_right_mid_mm']:.6f} mm")
-        print(
-            f"  V curvature min/max = "
-            f"{c['V'].min():.6f} / {c['V'].max():.6f} kN"
+
+    for node_id, x in enumerate(x_nodes, start=1):
+        ops.node(node_id, float(x), 0.0)
+
+    left_node = support_nodes[0]
+    right_node = support_nodes[-1]
+    internal_nodes = support_nodes[1:-1]
+
+    ops.fix(left_node, 1, 1, 0)
+
+    for node in internal_nodes:
+        ops.fix(int(node), 0, 1, 0)
+
+    ops.fix(right_node, 0, 1, 0)
+
+    ops.geomTransf("Linear", 1)
+
+    for ele_id in range(1, n_div + 1):
+        ops.element(
+            "elasticBeamColumn",
+            ele_id,
+            ele_id,
+            ele_id + 1,
+            A,
+            E,
+            I,
+            1,
         )
-        print(
-            f"  M curvature min/max = "
-            f"{c['M'].min():.6f} / {c['M'].max():.6f} kNm"
-        )
-        print(
-            f"  V OpenSees min/max = "
-            f"{c['V_ops'].min():.6f} / {c['V_ops'].max():.6f} kN"
-        )
-        print(
-            f"  M OpenSees min/max = "
-            f"{c['M_ops'].min():.6f} / {c['M_ops'].max():.6f} kNm"
-        )
-        print()
 
+    ops.timeSeries("Linear", 1)
+    ops.pattern("Plain", 1, 1)
 
-def print_opensees_element_forces(result):
-    print(f"\n=== OPENSEES ELEMENT END FORCES | {result['name']} ===")
-    print("point | x [m] | Py/V_ops [kN] | M_ops [kNm]")
-    print("-" * 70)
+    for ele_id, q in enumerate(q_elements, start=1):
+        ops.eleLoad("-ele", ele_id, "-type", "-beamUniform", float(q))
 
-    for i, (x, v, m) in enumerate(
-        zip(result["x_ops"], result["V_ops"], result["M_ops"]),
-        start=1,
-    ):
-        print(f"{i:5d} | {x:10.4f} | {v: .6f} | {m: .6f}")
-
-    print()
-
-
-def print_node_moment_jumps(result, sign=-1.0, source="curvature"):
-    if source == "curvature":
-        x = np.asarray(result["x"], dtype=float)
-        m = sign * np.asarray(result["M"], dtype=float)
-    elif source == "opensees":
-        x = np.asarray(result["x_ops"], dtype=float)
-        m = sign * np.asarray(result["M_ops"], dtype=float)
-    else:
-        raise ValueError(f"Unknown source: {source}")
-
-    x_nodes = np.asarray(result["x_nodes"], dtype=float)
-
-    dx = x_nodes[1] - x_nodes[0]
-    tol = dx * 1.0e-6
-
-    print(f"=== MOMENT JUMPS | {result['name']} | {source} ===")
-    print("node | x [m] | values at node | jump")
-    print("-" * 90)
-
-    for node_id, node_x in enumerate(x_nodes, start=1):
-        mask = np.isclose(x, node_x, atol=tol)
-        values = m[mask]
-
-        if len(values) >= 2:
-            jump = values.max() - values.min()
-            print(
-                f"{node_id:4d} | "
-                f"{node_x:8.3f} | "
-                f"{values} | "
-                f"{jump: .6f}"
+    if nodal_loads:
+        for load in nodal_loads:
+            ops.load(
+                int(load["node"]),
+                float(load.get("Fx", 0.0)),
+                float(load.get("Fz", 0.0)),
+                float(load.get("Mz", 0.0)),
             )
 
-    print()
+    ops.constraints("Transformation")
+    ops.numberer("RCM")
+    ops.system("BandGeneral")
+    ops.test("NormDispIncr", 1.0e-10, 30)
+    ops.algorithm("Newton")
+    ops.integrator("LoadControl", 1.0)
+    ops.analysis("Static")
+
+    ok = ops.analyze(1)
+    if ok != 0:
+        raise RuntimeError(f"Analysis failed: {case_name}")
+
+    ops.reactions()
+
+    uy_nodes = np.array([
+        ops.nodeDisp(node_id, 2)
+        for node_id in range(1, n_div + 2)
+    ])
+
+    # Current/manual recovery from displacement curvature.
+    x_all = []
+    V_all = []
+    M_all = []
+
+    for ele_id in range(1, n_div + 1):
+        Le = float(x_nodes[ele_id] - x_nodes[ele_id - 1])
+
+        x_local, V, M = recover_element_forces_from_curvature(
+            E=E,
+            I=I,
+            Le=Le,
+            node_i=ele_id,
+            node_j=ele_id + 1,
+            n_points=20,
+        )
+
+        x_global = x_nodes[ele_id - 1] + x_local
+
+        x_all.extend(x_global)
+        V_all.extend(V)
+        M_all.extend(M)
+
+    # Direct OpenSees element end forces.
+    x_ops, V_ops, M_ops = recover_element_forces_from_opensees_multi(x_nodes)
+
+    support_reactions_fz = {
+        int(node): float(ops.nodeReaction(int(node), 2))
+        for node in support_nodes
+    }
+
+    span_mid_node_ids = []
+    current_x = 0.0
+    for span_length in span_lengths:
+        mid_x = current_x + 0.5 * float(span_length)
+        span_mid_node_ids.append(find_nearest_node_id(x_nodes, mid_x))
+        current_x += float(span_length)
+
+    span_mid_uy_mm = {
+        int(node_id): float(ops.nodeDisp(int(node_id), 2) * 1000.0)
+        for node_id in span_mid_node_ids
+    }
+
+    return {
+        "name": case_name,
+        "x_nodes": x_nodes,
+        "support_nodes": support_nodes,
+        "support_reactions_fz": support_reactions_fz,
+        "span_mid_node_ids": span_mid_node_ids,
+        "span_mid_uy_mm": span_mid_uy_mm,
+        "uy_nodes": uy_nodes,
+
+        # manual curvature recovery
+        "x": np.array(x_all),
+        "V": np.array(V_all),
+        "M": np.array(M_all),
+
+        # direct OpenSees eleForce recovery
+        "x_ops": x_ops,
+        "V_ops": V_ops,
+        "M_ops": M_ops,
+    }
+
+
+# ============================================================
+# Data builder
+# ============================================================
 
 
 def build_debug_data(input_csv: Path, model_index: int, case_filter):
     row = load_model_row(input_csv, model_index)
 
-    L_left = to_float(row, "left_span_length_m")
-    L_right = to_float(row, "right_span_length_m")
-    L_total = L_left + L_right
+    model_type = row.get("model_type", "multi_span_beam")
 
-    n_div_left = to_int(row, "left_beam_divisions")
-    n_div_right = to_int(row, "right_beam_divisions")
-    n_div = n_div_left + n_div_right
-    dx = L_total / (n_div)
+    if "span_lengths_m" not in row or "beam_divisions" not in row:
+        raise ValueError(
+            "This debug file expects multi-span input columns: "
+            "span_lengths_m and beam_divisions."
+        )
+
+    span_lengths = parse_float_list(row["span_lengths_m"])
+    beam_divisions = parse_int_list(row["beam_divisions"])
+    n_spans = to_int(row, "n_spans")
+
+    if n_spans != len(span_lengths):
+        raise ValueError(
+            f"n_spans={n_spans}, but len(span_lengths)={len(span_lengths)}"
+        )
+
+    if len(span_lengths) != len(beam_divisions):
+        raise ValueError(
+            "span_lengths_m and beam_divisions must have the same length"
+        )
+
+    L_total = float(sum(span_lengths))
+    support_x = build_support_x(span_lengths)
+
+    (
+        x_nodes,
+        support_nodes,
+        element_lengths,
+        x_mid_elements,
+    ) = build_multi_span_geometry(
+        span_lengths=span_lengths,
+        beam_divisions=beam_divisions,
+    )
+
+    n_div = len(x_nodes) - 1
 
     E = 35e6
 
@@ -324,36 +566,29 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
     tendon_force_kn = to_float(row, "tendon_force_kn")
     P_total = n_tendons * tendon_force_kn
 
-    tendon_x = np.array([
-        0.0,
-        L_left / 2.0,
-        L_left,
-        L_left + L_right / 2.0,
-        L_total,
-    ])
+    tendon_x = build_tendon_x(span_lengths)
+    tendon_e = np.array(
+        parse_float_list(row["tendon_ecc_control_points_m"]),
+        dtype=float,
+    )
 
-    tendon_e = np.array([
-        to_float(row, "tendon_ecc_left_m"),
-        to_float(row, "tendon_ecc_left_span_mid_m"),
-        to_float(row, "tendon_ecc_mid_support_m"),
-        to_float(row, "tendon_ecc_right_span_mid_m"),
-        to_float(row, "tendon_ecc_right_m"),
-    ])
+    expected_tendon_points = 4 * n_spans + 1
+    if len(tendon_x) != expected_tendon_points:
+        raise ValueError(
+            f"Internal tendon_x error: len(tendon_x)={len(tendon_x)}, "
+            f"expected={expected_tendon_points}"
+        )
+
+    if len(tendon_e) != expected_tendon_points:
+        raise ValueError(
+            f"len(tendon_e)={len(tendon_e)}, expected={expected_tendon_points}. "
+            f"Check tendon_ecc_control_points_m."
+        )
 
     spline_m = build_active_spline(
         tendon_x,
         tendon_e,
     )
-
-    x_nodes = np.array([
-        i * dx
-        for i in range(n_div + 1)
-    ])
-
-    x_mid_elements = np.array([
-        (i + 0.5) * dx
-        for i in range(n_div)
-    ])
 
     (
         tendon_y_mid,
@@ -420,6 +655,9 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
         )
     )
 
+    # left_divs/right_divs are kept for compatibility with the current function
+    # signature. The implementation ignores them internally, so for multi-span
+    # we pass first/last span divisions.
     q_ps_midas_quarter_elements, prestress_midas_quarter_loads = (
         prestress_midas_segment_equilibrium_quarter_linearized_loads_from_spline(
             x_nodes=x_nodes,
@@ -427,16 +665,16 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
             yp=tendon_e,
             spline_m=spline_m,
             prestress_force=P_total,
-            left_divs=n_div_left,
-            right_divs=n_div_right,
+            left_divs=beam_divisions[0],
+            right_divs=beam_divisions[-1],
         )
     )
 
-    # q_total_old_elements = (
-    #     q_ps_elements
-    #     + q_udl_elements
-    #     + q_sw_elements
-    # )
+    q_total_old_elements = (
+        q_ps_elements
+        + q_udl_elements
+        + q_sw_elements
+    )
 
     q_total_angle_elements = (
         q_ps_angle_elements
@@ -457,12 +695,12 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
     )
 
     case_specs = [
-        # (
-        #     "ps-old",
-        #     "PS old: q curvature + end loads",
-        #     q_ps_elements,
-        #     prestress_old_nodal_loads,
-        # ),
+        (
+            "ps-old",
+            "PS old: q curvature + end loads",
+            q_ps_elements,
+            prestress_old_nodal_loads,
+        ),
         (
             "ps-v3",
             "PS v3: q angle + nodal moments",
@@ -493,12 +731,12 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
             q_sw_elements,
             None,
         ),
-        # (
-        #     "total-old",
-        #     "Total old: q curvature + end loads",
-        #     q_total_old_elements,
-        #     prestress_old_nodal_loads,
-        # ),
+        (
+            "total-old",
+            "Total old: q curvature + end loads",
+            q_total_old_elements,
+            prestress_old_nodal_loads,
+        ),
         (
             "total-v3",
             "Total v3: q angle + nodal moments",
@@ -525,15 +763,14 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
             continue
 
         cases.append(
-            run_case(
-                name,
-                q,
-                L_total,
-                L_left,
-                n_div,
-                E,
-                A,
-                I,
+            run_multi_span_case(
+                case_name=name,
+                q_elements=q,
+                span_lengths=span_lengths,
+                beam_divisions=beam_divisions,
+                E=E,
+                A=A,
+                I=I,
                 nodal_loads=nodal_loads,
             )
         )
@@ -541,14 +778,16 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
     return {
         "row": row,
         "model_index": model_index,
+        "model_type": model_type,
 
-        "L_left": L_left,
-        "L_right": L_right,
+        "n_spans": n_spans,
+        "span_lengths": span_lengths,
+        "beam_divisions": beam_divisions,
         "L_total": L_total,
-        "n_div_left": n_div_left,
-        "n_div_right": n_div_right,
+        "support_x": support_x,
+        "support_nodes": support_nodes,
+        "element_lengths": element_lengths,
         "n_div": n_div,
-        "dx": dx,
 
         "E": E,
         "A": A,
@@ -591,68 +830,157 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
     }
 
 
+# ============================================================
+# Prints
+# ============================================================
+
+
+def print_load_summary(name, loads):
+    loads = loads or []
+
+    print(f"=== {name} ===")
+    print(f"number of nodal loads = {len(loads)}")
+    print(
+        f"sum Fx = "
+        f"{sum(load.get('Fx', 0.0) for load in loads):.6f} kN"
+    )
+    print(
+        f"sum Fz = "
+        f"{sum(load.get('Fz', 0.0) for load in loads):.6f} kN"
+    )
+    print(
+        f"sum Mz = "
+        f"{sum(load.get('Mz', 0.0) for load in loads):.6f} kNm"
+    )
+
+    print("first 5 loads:")
+    for load in loads[:5]:
+        print(load)
+
+    print("last 5 loads:")
+    for load in loads[-5:]:
+        print(load)
+
+    print()
+
+
+def print_q_summary(name, q, element_lengths):
+    q = np.asarray(q, dtype=float)
+    element_lengths = np.asarray(element_lengths, dtype=float)
+
+    print(f"=== {name} ===")
+    print(f"q min = {q.min():.6f} kN/m")
+    print(f"q max = {q.max():.6f} kN/m")
+    print(f"sum(q * Le) = {np.sum(q * element_lengths):.6f} kN")
+    print()
+
+
+def print_summary(cases):
+    print("=== SUMMARY ===")
+
+    for c in cases:
+        print(c["name"])
+
+        support_reactions = c["support_reactions_fz"]
+        for node, reaction in support_reactions.items():
+            print(f"  R_node_{node:<4d} = {reaction:.6f} kN")
+
+        print(f"  sum R = {sum(support_reactions.values()):.6f} kN")
+
+        for node_id, uy_mm in c["span_mid_uy_mm"].items():
+            print(f"  uy span-mid node {node_id:<4d} = {uy_mm:.6f} mm")
+
+        print(
+            f"  V curvature min/max = "
+            f"{c['V'].min():.6f} / {c['V'].max():.6f} kN"
+        )
+        print(
+            f"  M curvature min/max = "
+            f"{c['M'].min():.6f} / {c['M'].max():.6f} kNm"
+        )
+        print(
+            f"  V OpenSees min/max = "
+            f"{c['V_ops'].min():.6f} / {c['V_ops'].max():.6f} kN"
+        )
+        print(
+            f"  M OpenSees min/max = "
+            f"{c['M_ops'].min():.6f} / {c['M_ops'].max():.6f} kNm"
+        )
+        print()
+
+
+def print_opensees_element_forces(result):
+    print(f"\n=== OPENSEES ELEMENT END FORCES | {result['name']} ===")
+    print("point | x [m] | Py/V_ops [kN] | M_ops [kNm]")
+    print("-" * 70)
+
+    for i, (x, v, m) in enumerate(
+        zip(result["x_ops"], result["V_ops"], result["M_ops"]),
+        start=1,
+    ):
+        print(f"{i:5d} | {x:10.4f} | {v: .6f} | {m: .6f}")
+
+    print()
+
+
+def print_node_moment_jumps(result, sign=-1.0, source="curvature"):
+    if source == "curvature":
+        x = np.asarray(result["x"], dtype=float)
+        m = sign * np.asarray(result["M"], dtype=float)
+    elif source == "opensees":
+        x = np.asarray(result["x_ops"], dtype=float)
+        m = sign * np.asarray(result["M_ops"], dtype=float)
+    else:
+        raise ValueError(f"Unknown source: {source}")
+
+    x_nodes = np.asarray(result["x_nodes"], dtype=float)
+    min_dx = float(np.min(np.diff(x_nodes)))
+    tol = min_dx * 1.0e-6
+
+    print(f"=== MOMENT JUMPS | {result['name']} | {source} ===")
+    print("node | x [m] | values at node | jump")
+    print("-" * 90)
+
+    for node_id, node_x in enumerate(x_nodes, start=1):
+        mask = np.isclose(x, node_x, atol=tol)
+        values = m[mask]
+
+        if len(values) >= 2:
+            jump = values.max() - values.min()
+            print(
+                f"{node_id:4d} | "
+                f"{node_x:8.3f} | "
+                f"{values} | "
+                f"{jump: .6f}"
+            )
+
+    print()
+
+
 def run_prints(data, selected_prints):
     row = data["row"]
-
-    if wants(selected_prints, "loads-v3"):
-        print_load_summary(
-            "V3 NODAL LOADS: q from angle change + nodal moments",
-            data["prestress_angle_moment_loads"],
-        )
-
-        q = data["q_ps_angle_elements"]
-        dx = data["dx"]
-
-        print("=== V3 Q ANGLE LOADS ===")
-        print(f"q min = {q.min():.6f} kN/m")
-        print(f"q max = {q.max():.6f} kN/m")
-        print(f"sum(q * dx) = {np.sum(q) * dx:.6f} kN")
-        print()
-
-    if wants(selected_prints, "loads-midas"):
-        print_load_summary(
-            "MIDAS-LIKE LOADS: segment equilibrium",
-            data["prestress_midas_segment_loads"],
-        )
-
-        q = data["q_ps_midas_elements"]
-        dx = data["dx"]
-
-        print("=== MIDAS-LIKE Q LOADS ===")
-        print(f"q min = {q.min():.6f} kN/m")
-        print(f"q max = {q.max():.6f} kN/m")
-        print(f"sum(q * dx) = {np.sum(q) * dx:.6f} kN")
-        print()
-
-    if wants(selected_prints, "loads-midas-quarter"):
-        print_load_summary(
-            "MIDAS-LIKE QUARTER-LINEARIZED LOADS: segment equilibrium",
-            data["prestress_midas_quarter_loads"],
-        )
-
-        q = data["q_ps_midas_quarter_elements"]
-        dx = data["dx"]
-
-        print("=== MIDAS-LIKE QUARTER-LINEARIZED Q LOADS ===")
-        print(f"q min = {q.min():.6f} kN/m")
-        print(f"q max = {q.max():.6f} kN/m")
-        print(f"sum(q * dx) = {np.sum(q) * dx:.6f} kN")
-        print()
+    element_lengths = data["element_lengths"]
 
     if wants(selected_prints, "geometry"):
         print("=== SELECTED MODEL ===")
         print(f"model_index = {row['model_index']}")
-        print(f"shape = {row['tendon_shape_type']}")
+        print(f"model_type = {data['model_type']}")
+        if "tendon_shape_type" in row:
+            print(f"shape = {row['tendon_shape_type']}")
         print()
 
         print("=== GEOMETRY ===")
-        print(f"L_left = {data['L_left']:.3f} m")
-        print(f"L_right = {data['L_right']:.3f} m")
+        print(f"n_spans = {data['n_spans']}")
+        print(f"span_lengths = {data['span_lengths']}")
+        print(f"beam_divisions = {data['beam_divisions']}")
         print(f"L_total = {data['L_total']:.3f} m")
-        print(f"n_div_left = {data['n_div_left']}")
-        print(f"n_div_right = {data['n_div_right']}")
         print(f"n_div = {data['n_div']}")
-        print(f"dx = {data['dx']:.3f} m")
+        print(f"support_x = {data['support_x']}")
+        print(f"support_nodes = {data['support_nodes']}")
+        print(
+            f"element length min/max = "
+            f"{element_lengths.min():.6f} / {element_lengths.max():.6f} m"
+        )
         print()
 
     if wants(selected_prints, "material"):
@@ -687,13 +1015,11 @@ def run_prints(data, selected_prints):
             f"{data['curvature_vertical_component'].min():.6f} / "
             f"{data['curvature_vertical_component'].max():.6f}"
         )
-        print(f"q_ps min = {data['q_ps_elements'].min():.6f} kN/m")
-        print(f"q_ps max = {data['q_ps_elements'].max():.6f} kN/m")
-        print(
-            f"sum(q_ps * dx) = "
-            f"{np.sum(data['q_ps_elements']) * data['dx']:.6f} kN"
+        print_q_summary(
+            "OLD q_ps = P * y'' / (1 + y'^2)^2",
+            data["q_ps_elements"],
+            element_lengths,
         )
-        print()
 
     if wants(selected_prints, "loads-old"):
         print("=== PRESTRESS END LOADS OLD ===")
@@ -711,6 +1037,39 @@ def run_prints(data, selected_prints):
             data["prestress_element_nodal_loads"],
         )
 
+    if wants(selected_prints, "loads-v3"):
+        print_load_summary(
+            "V3 NODAL LOADS: q from angle change + nodal moments",
+            data["prestress_angle_moment_loads"],
+        )
+        print_q_summary(
+            "V3 Q ANGLE LOADS",
+            data["q_ps_angle_elements"],
+            element_lengths,
+        )
+
+    if wants(selected_prints, "loads-midas"):
+        print_load_summary(
+            "MIDAS-LIKE LOADS: segment equilibrium",
+            data["prestress_midas_segment_loads"],
+        )
+        print_q_summary(
+            "MIDAS-LIKE Q LOADS",
+            data["q_ps_midas_elements"],
+            element_lengths,
+        )
+
+    if wants(selected_prints, "loads-midas-quarter"):
+        print_load_summary(
+            "MIDAS-LIKE QUARTER-LINEARIZED LOADS: segment equilibrium",
+            data["prestress_midas_quarter_loads"],
+        )
+        print_q_summary(
+            "MIDAS-LIKE QUARTER-LINEARIZED Q LOADS",
+            data["q_ps_midas_quarter_elements"],
+            element_lengths,
+        )
+
     if wants(selected_prints, "summary"):
         print_summary(data["cases"])
 
@@ -724,8 +1083,19 @@ def run_prints(data, selected_prints):
             print_node_moment_jumps(case, sign=-1.0, source="opensees")
 
 
+# ============================================================
+# Plots
+# ============================================================
+
+
+def draw_support_lines(data, label_first=True):
+    for i, sx in enumerate(data["support_x"]):
+        label = "support" if label_first and i == 0 else None
+        plt.axvline(sx, linestyle="--", linewidth=0.8, label=label)
+
+
 def plot_profile(data):
-    x_plot = np.linspace(0.0, data["L_total"], 500)
+    x_plot = np.linspace(0.0, data["L_total"], 1200)
     y_plot, _, _ = spline_y_yd_ydd(
         x_plot,
         data["tendon_x"],
@@ -733,11 +1103,11 @@ def plot_profile(data):
         data["spline_m"],
     )
 
-    beam_height = 1.0
+    beam_height = data["h"]
     beam_top = +beam_height / 2.0
     beam_bottom = -beam_height / 2.0
 
-    plt.figure()
+    plt.figure(figsize=(14, 5))
     plt.plot([0.0, data["L_total"]], [beam_top, beam_top], color="black", linewidth=1.0)
     plt.plot([0.0, data["L_total"]], [beam_bottom, beam_bottom], color="black", linewidth=1.0)
     plt.plot([0.0, 0.0], [beam_bottom, beam_top], color="black", linewidth=1.0)
@@ -747,7 +1117,7 @@ def plot_profile(data):
     plt.plot(x_plot, y_plot, linewidth=2.0, label="Tendon profile")
     plt.scatter(data["tendon_x"], data["tendon_e"], zorder=3, label="Control points")
 
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8, label="Middle support")
+    draw_support_lines(data)
 
     plt.xlabel("x [m]")
     plt.ylabel("eccentricity z [m]")
@@ -760,7 +1130,7 @@ def plot_profile(data):
 
 
 def plot_profile_simplified(data):
-    x_plot = np.linspace(0.0, data["L_total"], 500)
+    x_plot = np.linspace(0.0, data["L_total"], 1200)
 
     y_plot, _, _ = spline_y_yd_ydd(
         x_plot,
@@ -769,7 +1139,7 @@ def plot_profile_simplified(data):
         data["spline_m"],
     )
 
-    plt.figure()
+    plt.figure(figsize=(14, 5))
 
     plt.plot(
         x_plot,
@@ -791,12 +1161,7 @@ def plot_profile_simplified(data):
         label="Beam axis",
     )
 
-    plt.axvline(
-        data["L_left"],
-        linestyle="--",
-        linewidth=0.8,
-        label="Middle support",
-    )
+    draw_support_lines(data)
 
     plt.xlabel("x [m]")
     plt.ylabel("eccentricity e [m]")
@@ -805,8 +1170,9 @@ def plot_profile_simplified(data):
     plt.grid(True)
     plt.legend()
 
+
 def plot_profile_simplified_bezier(data):
-    x_plot = np.linspace(0.0, data["L_total"], 500)
+    x_plot = np.linspace(0.0, data["L_total"], 1200)
     spline = data["spline_m"]
 
     y_plot, _, _ = spline_y_yd_ydd(
@@ -829,7 +1195,7 @@ def plot_profile_simplified_bezier(data):
     plt.scatter(
         data["tendon_x"],
         data["tendon_e"],
-        s=100,
+        s=80,
         color="red",
         zorder=11,
         label="Real tendon points",
@@ -846,41 +1212,31 @@ def plot_profile_simplified_bezier(data):
             if L < 1.0e-12:
                 continue
 
-            unit_V = V / L
-            normal_V = np.array([-unit_V[1], unit_V[0]])
-
             base_C1 = P0 + (1.0 / 3.0) * V
             base_C2 = P0 + (2.0 / 3.0) * V
 
             c1 = spline.control_points_1[i]
             c2 = spline.control_points_2[i]
-                        # =====================================================
-            # DEBUG INFO
-            # =====================================================
 
             dy = P3[1] - P0[1]
             dx = P3[0] - P0[0]
 
             angle_deg = np.degrees(np.arctan2(dy, dx))
             abs_angle_deg = abs(angle_deg)
-
             angle_to_vertical_deg = 90.0 - abs_angle_deg
 
-            # Signed distances from chord
             signed_c1 = np.cross(V, c1 - base_C1) / L
             signed_c2 = np.cross(V, c2 - base_C2) / L
 
-            # Real perpendicular distances
             dist_c1 = abs(signed_c1)
             dist_c2 = abs(signed_c2)
 
-            # Signs relative to segment normal
             sign_c1 = np.sign(signed_c1)
             sign_c2 = np.sign(signed_c2)
 
             print(
-                f"segment {i+1} | "
-                f"P{i+1}->P{i+2} | "
+                f"segment {i + 1} | "
+                f"P{i + 1}->P{i + 2} | "
                 f"dy={dy:+.4f} | "
                 f"angle={angle_deg:+.3f} deg | "
                 f"|angle|={abs_angle_deg:.3f} deg | "
@@ -888,6 +1244,7 @@ def plot_profile_simplified_bezier(data):
                 f"signs=({sign_c1:+.0f}, {sign_c2:+.0f}) | "
                 f"distances=({dist_c1:.4f}, {dist_c2:.4f})"
             )
+
             for base, ctrl, label_suffix in [
                 (base_C1, c1, "C1"),
                 (base_C2, c2, "C2"),
@@ -905,12 +1262,12 @@ def plot_profile_simplified_bezier(data):
                     ctrl[0],
                     ctrl[1],
                     marker="x",
-                    s=80,
+                    s=70,
                     color=(
-                    "green"
-                    if np.sign(np.cross(V, ctrl - base)) >= 0.0
-                    else "purple"
-                ),
+                        "green"
+                        if np.sign(np.cross(V, ctrl - base)) >= 0.0
+                        else "purple"
+                    ),
                     zorder=12,
                 )
 
@@ -949,13 +1306,7 @@ def plot_profile_simplified_bezier(data):
         label="Beam axis",
     )
 
-    plt.axvline(
-        data["L_left"],
-        linestyle="--",
-        color="blue",
-        linewidth=0.8,
-        label="Middle support",
-    )
+    draw_support_lines(data)
 
     plt.xlabel("x [m]")
     plt.ylabel("eccentricity e [m]")
@@ -968,8 +1319,9 @@ def plot_profile_simplified_bezier(data):
     plt.legend(loc="upper right")
     plt.gca().set_aspect("auto")
 
+
 def plot_q_old(data, annotate_enabled):
-    x_plot = np.linspace(0.0, data["L_total"], 500)
+    x_plot = np.linspace(0.0, data["L_total"], 1200)
     _, yd_plot, ydd_plot = spline_y_yd_ydd(
         x_plot,
         data["tendon_x"],
@@ -980,7 +1332,7 @@ def plot_q_old(data, annotate_enabled):
     curvature_plot = ydd_plot / (1.0 + yd_plot**2) ** 2
     q_ps_plot = data["P_total"] * curvature_plot
 
-    plt.figure()
+    plt.figure(figsize=(14, 5))
     plt.plot(
         x_plot,
         q_ps_plot,
@@ -1000,7 +1352,7 @@ def plot_q_old(data, annotate_enabled):
 
     plt.fill_between(x_plot, q_ps_plot, 0.0, alpha=0.3)
     plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8, label="Middle support")
+    draw_support_lines(data)
     plt.xlabel("x [m]")
     plt.ylabel("q_ps [kN/m]")
     plt.title("OLD equivalent prestress distributed load")
@@ -1022,7 +1374,7 @@ def plot_nodal_loads(data, component):
         for load in loads
     ])
 
-    plt.figure()
+    plt.figure(figsize=(14, 5))
     plt.scatter(
         load_x,
         values,
@@ -1030,7 +1382,7 @@ def plot_nodal_loads(data, component):
         label=f"new element nodal {component}",
     )
     plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8, label="Middle support")
+    draw_support_lines(data)
     plt.xlabel("x [m]")
     plt.ylabel(component)
     plt.title(f"NEW prestress element nodal {component} loads")
@@ -1039,7 +1391,7 @@ def plot_nodal_loads(data, component):
 
 
 def plot_deflections(data, annotate_enabled):
-    plt.figure()
+    plt.figure(figsize=(14, 5))
     scale = 100.0
 
     for case in data["cases"]:
@@ -1052,7 +1404,7 @@ def plot_deflections(data, annotate_enabled):
         maybe_annotate(case["x_nodes"], y, annotate_enabled)
 
     plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8)
+    draw_support_lines(data)
     plt.xlabel("x [m]")
     plt.ylabel("scaled uy [m]")
     plt.title("Deflection")
@@ -1061,7 +1413,7 @@ def plot_deflections(data, annotate_enabled):
 
 
 def plot_moments_curvature(data, annotate_enabled):
-    plt.figure()
+    plt.figure(figsize=(14, 5))
 
     for case in data["cases"]:
         x = case["x"]
@@ -1069,22 +1421,23 @@ def plot_moments_curvature(data, annotate_enabled):
 
         x, M = collapse_duplicate_x_values(x, M, mode="mean")
 
-        x_plot = np.linspace(x.min(), x.max(), 500)
+        x_plot = np.linspace(x.min(), x.max(), 1200)
         M_plot = np.interp(x_plot, x, M)
 
         plt.plot(x_plot, M_plot, label=case["name"])
         maybe_annotate(x, M, annotate_enabled)
 
     plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8)
+    draw_support_lines(data)
     plt.xlabel("x [m]")
     plt.ylabel("M [kNm]")
     plt.title("Bending moments from curvature recovery")
     plt.grid(True)
     plt.legend()
-    
+
+
 def plot_moments_opensees(data, annotate_enabled):
-    plt.figure()
+    plt.figure(figsize=(14, 5))
 
     for case in data["cases"]:
         x = case["x_ops"]
@@ -1094,7 +1447,7 @@ def plot_moments_opensees(data, annotate_enabled):
         maybe_annotate(x, M, annotate_enabled)
 
     plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8)
+    draw_support_lines(data)
     plt.xlabel("x [m]")
     plt.ylabel("M [kNm]")
     plt.title("Bending moments from OpenSees eleForce")
@@ -1103,23 +1456,19 @@ def plot_moments_opensees(data, annotate_enabled):
 
 
 def plot_moments_compare(data, annotate_enabled):
-    plt.figure()
+    plt.figure(figsize=(14, 5))
 
     for case in data["cases"]:
-
-        # curvature recovery
         x_curv = case["x"]
         M_curv = -case["M"]
 
-        # OpenSees raw
         x_ops = case["x_ops"]
         M_ops = -case["M_ops"]
 
-        # collapse duplicated node values
         x_ops, M_ops = collapse_duplicate_x_values(
             x_ops,
             M_ops,
-            mode="mean",   # albo "absmax"
+            mode="mean",
         )
 
         plt.plot(
@@ -1141,7 +1490,7 @@ def plot_moments_compare(data, annotate_enabled):
             annotate_min_max(x_ops, M_ops)
 
     plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8)
+    draw_support_lines(data)
     plt.xlabel("x [m]")
     plt.ylabel("M [kNm]")
     plt.title("Bending moments: curvature recovery vs OpenSees eleForce")
@@ -1150,79 +1499,39 @@ def plot_moments_compare(data, annotate_enabled):
 
 
 def plot_reactions(data):
-    ps_old_case = next(
-        (
-            c for c in data["cases"]
-            if c["name"] == "PS old: q curvature + end loads"
-        ),
-        None,
-    )
+    ps_cases = [
+        c for c in data["cases"]
+        if c["name"].startswith("PS ")
+    ]
 
-    ps_v3_case = next(
-        (
-            c for c in data["cases"]
-            if c["name"] == "PS v3: q angle + nodal moments"
-        ),
-        None,
-    )
-
-    if ps_old_case is None and ps_v3_case is None:
-        print("No PS old / PS v3 case available for reactions plot.")
+    if not ps_cases:
+        print("No PS case available for reactions plot.")
         return
 
-    support_x = np.array([
-        0.0,
-        data["L_left"],
-        data["L_total"],
-    ])
+    support_x = np.asarray(data["support_x"], dtype=float)
+    support_nodes = data["support_nodes"]
 
-    plt.figure()
+    plt.figure(figsize=(14, 5))
 
-    if ps_old_case is not None:
-        support_reactions_old = np.array([
-            ps_old_case["R_left"],
-            ps_old_case["R_mid"],
-            ps_old_case["R_right"],
+    for case in ps_cases:
+        support_reactions = np.array([
+            case["support_reactions_fz"][int(node)]
+            for node in support_nodes
         ])
 
         plt.scatter(
             support_x,
-            support_reactions_old,
+            support_reactions,
             s=80,
-            marker="o",
-            label="old PS support reactions [kN]",
+            label=f"{case['name']} support reactions [kN]",
         )
 
-        for x, r in zip(support_x, support_reactions_old):
+        for x, r in zip(support_x, support_reactions):
             plt.annotate(
-                f"old R = {r:.2f}",
+                f"R = {r:.2f}",
                 (x, r),
                 textcoords="offset points",
-                xytext=(0, -18),
-                ha="center",
-            )
-
-    if ps_v3_case is not None:
-        support_reactions_new = np.array([
-            ps_v3_case["R_left"],
-            ps_v3_case["R_mid"],
-            ps_v3_case["R_right"],
-        ])
-
-        plt.scatter(
-            support_x,
-            support_reactions_new,
-            s=80,
-            marker="s",
-            label="v3 PS support reactions [kN]",
-        )
-
-        for x, r in zip(support_x, support_reactions_new):
-            plt.annotate(
-                f"v3 R = {r:.2f}",
-                (x, r),
-                textcoords="offset points",
-                xytext=(0, 12),
+                xytext=(0, 10),
                 ha="center",
             )
 
@@ -1245,10 +1554,10 @@ def plot_reactions(data):
     )
 
     plt.axhline(0.0, linewidth=0.8)
-    plt.axvline(data["L_left"], linestyle="--", linewidth=0.8, label="Middle support")
+    draw_support_lines(data)
     plt.xlabel("x [m]")
     plt.ylabel("Fz / reactions")
-    plt.title("Prestress support reactions: old vs v3")
+    plt.title("Prestress support reactions")
     plt.grid(True)
     plt.legend()
 
@@ -1287,6 +1596,7 @@ def run_plots(data, selected_plots, annotate_enabled):
     if wants(selected_plots, "reactions"):
         plot_reactions(data)
 
+
 def collapse_duplicate_x_values(x, y, mode="mean"):
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -1313,16 +1623,79 @@ def collapse_duplicate_x_values(x, y, mode="mean"):
 
     return np.array(unique_x), np.array(collapsed_y)
 
+
+# ============================================================
+# Main
+# ============================================================
+
+
 def main():
     args = parse_args()
 
     USE_HARDCODED_DEBUG = True
 
     if USE_HARDCODED_DEBUG:
-        args.model = 113
-        args.cases = ["ps-midas-quarter"]
-        args.plots = ["moments", "profile-simplified-bezier"]
-        args.prints = ["moments"]
+        args.model = 2
+
+        args.cases = [
+            # "all",
+
+            # Prestress only
+            # "ps-v3",
+            # "ps-midas",
+            "ps-midas-quarter",
+
+            # Basic loads
+            # "udl",
+            # "sw",
+
+            # Total
+            # "total-v3",
+            # "total-midas",
+            "total-midas-quarter",
+        ]
+
+        args.plots = [
+            # "all",
+
+            # Geometry / tendon
+            # "profile",
+            "profile-simplified",
+            # "profile-simplified-bezier",
+
+            # Loads
+            # "q-old",
+            # "nodal-fz",
+            # "nodal-mz",
+
+            # Results
+            # "deflections",
+            "moments",
+            # "moments-opensees",
+            # "moments-compare",
+            # "reactions",
+        ]
+
+        args.prints = [
+            # "all",
+
+            # Basic info
+            # "summary",
+            # "geometry",
+            # "material",
+            # "profile",
+
+            # Loads
+            # "loads-v3",
+            # "loads-midas",
+            # "loads-midas-quarter",
+
+            # OpenSees debug
+            # "opensees-forces",
+            # "jumps",
+
+            "summary",
+        ]
 
     print("DEBUG ARGS:", args)
 
@@ -1343,5 +1716,8 @@ def main():
         )
         plt.show()
 
+
 if __name__ == "__main__":
     main()
+
+

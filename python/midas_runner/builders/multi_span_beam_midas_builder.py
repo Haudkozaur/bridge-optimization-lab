@@ -2,21 +2,38 @@ from random import Random
 
 from midas_civil import Boundary, Element, Load, Material, Model, Section, Tendon, Offset
 
-from model_inputs.configs.experiment_inputs_config import TwoSpanPostTensionedBeamConfig
+from model_inputs.configs.experiment_inputs_config import MultiSpanBeamConfig
 
 
-class TwoSpanPostTensionedMidasBuilder:
-    def __init__(self, config: TwoSpanPostTensionedBeamConfig, rng: Random):
+class MultiSpanBeamMidasBuilder:
+    def __init__(self, config: MultiSpanBeamConfig, rng: Random):
         self.config = config
         self.rng = rng
 
     def build_model(self, sampled: dict) -> dict:
-        left_span = sampled["left_span_length_m"]
-        right_span = sampled["right_span_length_m"]
-        total_span = left_span + right_span
+        span_lengths = self._parse_float_list(sampled["span_lengths_m"])
+        beam_divisions = self._parse_int_list(sampled["beam_divisions"])
+        tendon_ecc = self._parse_float_list(sampled["tendon_ecc_control_points_m"])
+
+        n_spans = int(sampled["n_spans"])
+
+        if len(span_lengths) != n_spans:
+            raise ValueError(f"n_spans={n_spans}, but got {len(span_lengths)} span lengths")
+
+        if len(beam_divisions) != n_spans:
+            raise ValueError(f"n_spans={n_spans}, but got {len(beam_divisions)} beam divisions")
+
+        expected_ecc_count = 4 * n_spans + 1
+        if len(tendon_ecc) != expected_ecc_count:
+            raise ValueError(
+                f"Expected {expected_ecc_count} tendon eccentricity points, "
+                f"but got {len(tendon_ecc)}"
+            )
+
+        total_span = sum(span_lengths)
+        total_divisions = sum(beam_divisions)
 
         udl_kn_per_m = sampled["udl_kn_per_m"]
-        total_divisions = sampled["left_beam_divisions"] + sampled["right_beam_divisions"]
 
         self._create_concrete_material()
         self._create_tendon_material()
@@ -24,54 +41,55 @@ class TwoSpanPostTensionedMidasBuilder:
 
         beam_ids = self._create_beam_elements(total_span, total_divisions)
 
+        support_x = self._build_support_x(span_lengths)
+
         left_nodes = [1]
-        middle_nodes = [sampled["left_beam_divisions"] + 1]
+        internal_nodes = [
+            sum(beam_divisions[:i]) + 1
+            for i in range(1, n_spans)
+        ]
         right_nodes = [total_divisions + 1]
 
         all_nodes = list(range(1, total_divisions + 2))
 
-        support_nodes = {
-            "left": left_nodes,
-            "middle": middle_nodes,
-            "right": right_nodes,
-        }
+        support_nodes = {"left": left_nodes}
 
-        if not left_nodes:
-            raise ValueError("No left support nodes found at x=0")
-        if not middle_nodes:
-            raise ValueError(f"No middle support nodes found at x={left_span}")
-        if not right_nodes:
-            raise ValueError(f"No right support nodes found at x={total_span}")
+        for i, node in enumerate(internal_nodes, start=1):
+            support_nodes[f"internal_{i}"] = [node]
+
+        support_nodes["right"] = right_nodes
 
         Boundary.Support(left_nodes, self.config.left_support)
-        Boundary.Support(middle_nodes, self.config.middle_support)
+        Boundary.Support(internal_nodes, self.config.internal_support)
         Boundary.Support(right_nodes, self.config.right_support)
 
         self._apply_basic_loads(beam_ids, udl_kn_per_m)
-        self._apply_prestress(sampled, beam_ids)
+        self._apply_prestress(
+            sampled=sampled,
+            beam_ids=beam_ids,
+            span_lengths=span_lengths,
+            tendon_ecc=tendon_ecc,
+        )
 
-        left_mid_nodes = self._get_nodes_at_x(left_span / 2.0)
-        right_mid_nodes = self._get_nodes_at_x(left_span + right_span / 2.0)
+        mid_span_nodes = self._get_mid_span_nodes(span_lengths)
 
         return {
-            "left_span_length_m": left_span,
-            "right_span_length_m": right_span,
+            "n_spans": n_spans,
+            "span_lengths_m": span_lengths,
             "total_span_length_m": total_span,
+            "beam_divisions": beam_divisions,
+            "total_divisions": total_divisions,
 
             "beam_height_m": sampled["beam_height_m"],
             "beam_width_m": sampled["beam_width_m"],
 
+            "support_x": support_x,
             "left_nodes": left_nodes,
-            "middle_nodes": middle_nodes,
+            "internal_nodes": internal_nodes,
             "right_nodes": right_nodes,
-
-            "left_mid_nodes": left_mid_nodes,
-            "right_mid_nodes": right_mid_nodes,
-
-            "all_nodes": all_nodes,
             "support_nodes": support_nodes,
-
-            "mid_nodes": left_mid_nodes,
+            "all_nodes": all_nodes,
+            "mid_span_nodes": mid_span_nodes,
 
             "beam_ids": beam_ids,
 
@@ -85,13 +103,8 @@ class TwoSpanPostTensionedMidasBuilder:
             "total_tendon_force_kn": sampled["n_tendons"] * sampled["tendon_force_kn"],
             "total_tendon_area_mm2": sampled["n_tendons"] * sampled["tendon_area_mm2"],
 
-            "tendon_shape_type": sampled["tendon_shape_type"],
-
-            "tendon_ecc_left_m": sampled["tendon_ecc_left_m"],
-            "tendon_ecc_left_span_mid_m": sampled["tendon_ecc_left_span_mid_m"],
-            "tendon_ecc_mid_support_m": sampled["tendon_ecc_mid_support_m"],
-            "tendon_ecc_right_span_mid_m": sampled["tendon_ecc_right_span_mid_m"],
-            "tendon_ecc_right_m": sampled["tendon_ecc_right_m"],
+            "tendon_control_points_per_span": sampled["tendon_control_points_per_span"],
+            "tendon_ecc_control_points_m": tendon_ecc,
         }
 
     def _create_concrete_material(self) -> None:
@@ -159,17 +172,20 @@ class TwoSpanPostTensionedMidasBuilder:
             P=[-udl_kn_per_m, -udl_kn_per_m],
         )
 
-    def _apply_prestress(self, sampled: dict, beam_ids: list[int]) -> None:
-        left_span = sampled["left_span_length_m"]
-        right_span = sampled["right_span_length_m"]
-        total_span = left_span + right_span
-
+    def _apply_prestress(
+        self,
+        sampled: dict,
+        beam_ids: list[int],
+        span_lengths: list[float],
+        tendon_ecc: list[float],
+    ) -> None:
         n_tendons = sampled["n_tendons"]
         tendon_force_kn = sampled["tendon_force_kn"]
         tendon_area_mm2 = sampled["tendon_area_mm2"]
 
         total_tendon_force_kn = n_tendons * tendon_force_kn
-        total_tendon_area_mm2 = tendon_area_mm2 * 0.000001
+        total_tendon_area_m2 = n_tendons * tendon_area_mm2 * 1.0e-6
+
         tendon_duct_diameter = 0.1
 
         tendon_prop_id = 1
@@ -181,23 +197,24 @@ class TwoSpanPostTensionedMidasBuilder:
             type=2,
             id=tendon_prop_id,
             matID=self.config.tendon_material_id,
-            tdn_area=total_tendon_area_mm2,
+            tdn_area=total_tendon_area_m2,
             duct_dia=tendon_duct_diameter,
             relaxation=Tendon.Relaxation.Null(1800, 1500),
         )
         Tendon.Property.create()
+
+        total_span = sum(span_lengths)
 
         prof_xy = [
             [0.0, 0.0],
             [total_span, 0.0],
         ]
 
+        tendon_x = self._build_tendon_x(span_lengths)
+
         prof_xz = [
-            [0.0, sampled["tendon_ecc_left_m"]],
-            [left_span / 2.0, sampled["tendon_ecc_left_span_mid_m"]],
-            [left_span, sampled["tendon_ecc_mid_support_m"]],
-            [left_span + right_span / 2.0, sampled["tendon_ecc_right_span_mid_m"]],
-            [total_span, sampled["tendon_ecc_right_m"]],
+            [float(x), float(e)]
+            for x, e in zip(tendon_x, tendon_ecc)
         ]
 
         Tendon.Profile(
@@ -225,5 +242,66 @@ class TwoSpanPostTensionedMidasBuilder:
         )
         Tendon.Prestress.create()
 
+    def _build_support_x(self, span_lengths: list[float]) -> list[float]:
+        support_x = [0.0]
+        current_x = 0.0
+
+        for span_length in span_lengths:
+            current_x += span_length
+            support_x.append(current_x)
+
+        return support_x
+
+    def _build_tendon_x(self, span_lengths: list[float]) -> list[float]:
+        points = []
+        current_x = 0.0
+
+        for i, span_length in enumerate(span_lengths):
+            x0 = current_x
+            x1 = current_x + span_length
+
+            local_points = [
+                x0,
+                x0 + 0.25 * span_length,
+                x0 + 0.50 * span_length,
+                x0 + 0.75 * span_length,
+                x1,
+            ]
+
+            if i == 0:
+                points.extend(local_points)
+            else:
+                points.extend(local_points[1:])
+
+            current_x = x1
+
+        return points
+
+    def _get_mid_span_nodes(self, span_lengths: list[float]) -> dict[int, list[int]]:
+        mid_nodes = {}
+
+        current_x = 0.0
+
+        for i, span_length in enumerate(span_lengths, start=1):
+            mid_x = current_x + 0.5 * span_length
+            mid_nodes[i] = self._get_nodes_at_x(mid_x)
+            current_x += span_length
+
+        return mid_nodes
+
     def _get_nodes_at_x(self, x: float) -> list[int]:
         return sorted(Model.Select.Box([x, 0, 0], [x, 0, 0], "NODE_ID"))
+
+    def _parse_float_list(self, value) -> list[float]:
+        return [
+            float(part)
+            for part in str(value).split(";")
+            if part.strip()
+        ]
+
+    def _parse_int_list(self, value) -> list[int]:
+        return [
+            int(float(part))
+            for part in str(value).split(";")
+            if part.strip()
+        ]

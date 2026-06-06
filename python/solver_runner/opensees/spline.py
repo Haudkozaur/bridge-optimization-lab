@@ -714,9 +714,13 @@ class PiecewiseBezierSpline:
 
     def derivative(self, order: int = 1):
         return lambda x: self._eval(x, derivative_order=order)
-
+    
     def _eval(self, x, derivative_order=0):
         x_arr, scalar_input = _as_array_keep_scalar(x)
+
+        x_arr = np.asarray(x_arr, dtype=float)
+        x_arr = np.clip(x_arr, self.xp[0], self.xp[-1])
+
         out = np.zeros_like(x_arr, dtype=float)
 
         for i in range(len(self.xp) - 1):

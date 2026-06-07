@@ -52,12 +52,12 @@ class MultiSpanBeamMidasBuilder:
 
         all_nodes = list(range(1, total_divisions + 2))
 
-        support_nodes = {"left": left_nodes}
+        all_support_nodes = left_nodes + internal_nodes + right_nodes
 
-        for i, node in enumerate(internal_nodes, start=1):
-            support_nodes[f"internal_{i}"] = [node]
-
-        support_nodes["right"] = right_nodes
+        support_nodes = {
+            f"support_{i}": [node]
+            for i, node in enumerate(all_support_nodes)
+        }
 
         Boundary.Support(left_nodes, self.config.left_support)
         Boundary.Support(internal_nodes, self.config.internal_support)
@@ -84,6 +84,7 @@ class MultiSpanBeamMidasBuilder:
             "beam_width_m": sampled["beam_width_m"],
 
             "support_x": support_x,
+            "support_node_ids": all_support_nodes,
             "left_nodes": left_nodes,
             "internal_nodes": internal_nodes,
             "right_nodes": right_nodes,

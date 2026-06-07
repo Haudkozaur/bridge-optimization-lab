@@ -13,7 +13,7 @@ class ResultCollector:
         loadcases = {
             "sw": model_meta.get("self_weight_result_name"),
             "udl": model_meta.get("udl_case_result_name"),
-            "ts": model_meta.get("ts_case_result_name"),
+            # "ts": model_meta.get("ts_case_result_name"),
             "ps": model_meta.get("prestress_case_result_name"),
         }
 

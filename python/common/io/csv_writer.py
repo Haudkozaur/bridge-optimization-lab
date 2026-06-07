@@ -31,7 +31,7 @@ class CsvWriter:
     ]
 
     LOAD_CASES = ["sw", "udl", "ps", "ts", "total"]
-    SUPPORTS = ["left", "middle", "right"]
+
 
     STATUS_COLUMNS = [
         "analysis_status",
@@ -42,10 +42,12 @@ class CsvWriter:
         self,
         output_path: str,
         max_node_id: int | None = None,
+        max_support_count: int | None = None,
         input_columns: list[str] | None = None,
     ):
         self.output_path = output_path
         self.max_node_id = max_node_id
+        self.max_support_count = max_support_count
         self.input_columns = input_columns or self.INPUT_COLUMNS
         self.fieldnames = self._build_fixed_fieldnames() if max_node_id is not None else None
 
@@ -125,8 +127,10 @@ class CsvWriter:
                 fieldnames.append(f"moments_my_{case}_{node_id}")
 
         for case in self.LOAD_CASES:
-            for support in self.SUPPORTS:
-                fieldnames.append(f"reactions_fz_{case}_{support}")
+            for support_id in range(self.max_support_count):
+                fieldnames.append(
+                    f"reactions_fz_{case}_support_{support_id}"
+                )
 
         fieldnames.extend(self.STATUS_COLUMNS)
 

@@ -169,8 +169,8 @@ def run_multi_span_case(
     x_ops, V_ops, M_ops = recover_element_forces_from_opensees_multi(x_nodes)
 
     support_reactions_fz = {
-        int(node): float(ops.nodeReaction(int(node), 2))
-        for node in support_nodes
+        f"support_{i}": float(ops.nodeReaction(int(node), 2))
+        for i, node in enumerate(support_nodes)
     }
 
     return {

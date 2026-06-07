@@ -206,6 +206,8 @@ class MultiSpanBeamInputGenerator:
             )
 
         return e_min, e_max
+    def get_max_support_count(self) -> int:
+        return self.config.n_spans.max + 1
     
     def sample_parameters(self) -> dict:
 
@@ -257,7 +259,7 @@ class MultiSpanBeamInputGenerator:
             "tendon_force_kn": self._sample_float_range(self.config.tendon_force_kn),
             "tendon_area_mm2": self._sample_float_range(self.config.tendon_area_mm2),
 
-            # "tendon_control_points_per_span": self.config.tendon_control_points_per_span,
+            "tendon_control_points_per_span": self.config.tendon_control_points_per_span,
             "tendon_ecc_control_points_m": self._serialize_float_list(
                 tendon_ecc_control_points_m,
                 ndigits=3,
@@ -273,18 +275,19 @@ class MultiSpanBeamInputGenerator:
             "span_lengths_m",
             "beam_divisions",
 
-            # "tendon_control_points_per_span",
+            "tendon_control_points_per_span",
             "tendon_ecc_control_points_m",
 
             "udl_kn_per_m",
 
             "beam_height_m",
             "beam_width_m",
-
+            "tendon_cover_m",
             "n_tendons",
+
             "tendon_force_kn",
             "tendon_area_mm2",
-            "tendon_cover_m",
+
             "model_type",
         ]
 

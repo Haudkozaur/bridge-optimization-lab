@@ -16,7 +16,7 @@ def main():
     input_path = run_dir / "input.csv"
 
     cfg = ExperimentInputsConfig(
-        n_models=100, 
+        n_models=500, 
         model_type=Model_Type.MULTI_SPAN_BEAM,
         random_seed=None,
         input_csv_path=str(input_path),

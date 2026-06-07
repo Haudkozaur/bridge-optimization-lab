@@ -29,7 +29,7 @@ DEFAULT_INPUT_CSV = (
     PROJECT_ROOT
     / "model_inputs"
     / "prepared_inputs"
-    / "20260605_181003"
+    / "20260607_013934"
     / "input.csv"
 )
 
@@ -1635,7 +1635,7 @@ def main():
     USE_HARDCODED_DEBUG = True
 
     if USE_HARDCODED_DEBUG:
-        args.model = 2
+        args.model = 1
 
         args.cases = [
             # "all",

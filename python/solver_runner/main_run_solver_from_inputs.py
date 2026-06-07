@@ -29,7 +29,7 @@ def main():
         PYTHON_ROOT
         / "model_inputs"
         / "prepared_inputs"
-        / "20260605_181003"
+        / "20260607_013934"
         / "input.csv"
     )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

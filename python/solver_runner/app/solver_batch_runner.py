@@ -51,13 +51,15 @@ class SolverBatchRunner:
                 raise ValueError(f"Unsupported model_type: {self.config.model_type}")
 
         self.max_node_id = schema_helper.get_max_node_id()
+        self.max_support_count = schema_helper.get_max_support_count()
         input_columns = schema_helper.input_field_order()
 
         self.input_reader = CsvReader(self.input_csv_path)
-
+       
         self.results_writer = CsvWriter(
             self.config.output_csv_path,
             max_node_id=self.max_node_id,
+            max_support_count=self.max_support_count,
             input_columns=input_columns,
         )
 

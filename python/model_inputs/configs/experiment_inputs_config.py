@@ -26,6 +26,15 @@ class MultiSpanBeamConfig:
 
         FORCED_REASONABLE_SYMMETRIC = 7
 
+    class UdlLoadType(Enum):
+        TRUE_UDL = 1
+        RANDOM_SPAN_UDL = 2
+        RANDOM_UDL = 3
+        RANDOM_SPAN_RANDOM_UDL = 4
+
+        SYMMETRIC_RANDOM_SPAN_UDL = 5
+        SYMMETRIC_RANDOM_UDL = 6
+
     n_spans: IntRange = field(default_factory=lambda: IntRange("random", 2, 10))
     span_length_m: FloatRange = field(default_factory=lambda: FloatRange("random", 8.0, 30.0))
 
@@ -33,6 +42,9 @@ class MultiSpanBeamConfig:
     beam_width_m: FloatRange = field(default_factory=lambda: FloatRange("random", 0.4, 1.2))
 
     udl_kn_per_m: FloatRange = field(default_factory=lambda: FloatRange("random", 0.0, 15.0))
+    udl_load_type_randomizer: IntRange = field(default_factory=lambda: IntRange("random", 1, 4))
+    udl_load_type: UdlLoadType | None = None
+
 
     self_weight_case: str = "Self Weight"
     udl_case: str = "UDL"
@@ -77,6 +89,7 @@ class MultiSpanBeamConfig:
         self.beam_width_m.validate("beam_width_m")
 
         self.udl_kn_per_m.validate("udl_kn_per_m")
+        self.udl_load_type_randomizer.validate("udl_load_type_randomizer")
 
         self.n_tendons.validate("n_tendons")
         self.tendon_force_kn.validate("tendon_force_kn")
@@ -131,6 +144,19 @@ class MultiSpanBeamConfig:
             self.TendonShapeType,
         ):
             raise ValueError("tendon_shape_type must be TendonShapeType or None")
+        
+        if self.udl_load_type_randomizer.min < 1:
+            raise ValueError("udl_load_type_randomizer.min must be >= 1")
+
+        if self.udl_load_type_randomizer.max > 6:
+            raise ValueError("udl_load_type_randomizer.max must be <= 6")
+
+        if self.udl_load_type is not None and not isinstance(
+            self.udl_load_type,
+            self.UdlLoadType,
+        ):
+            raise ValueError("udl_load_type must be UdlLoadType or None")
+
         
 @dataclass
 class TwoSpanPostTensionedBeamConfig:

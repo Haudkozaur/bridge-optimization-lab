@@ -4,31 +4,27 @@ public class BridgeFitnessResult
 {
     public float Fitness { get; set; }
 
-    // Scores
-    public float HyperstaticEffectScore { get; set; }
-    public float MiddleSupportMomentScore { get; set; }
+    public float StructuralScore { get; set; }
     public float DeflectionScore { get; set; }
     public float SpanMomentScore { get; set; }
-
-    // Symmetry penalty
+    public float SupportMomentScore { get; set; }
+    public float ReactionScore { get; set; }
     public float SymmetryScore { get; set; }
     public bool SymmetryPenaltyApplied { get; set; }
+    public float CoverPenaltyScore { get; set; }
+    public float SmoothnessPenaltyScore { get; set; }
+    public float JumpPenaltyScore { get; set; }
 
-    // Supports
-    public float MomentA { get; set; }
-    public float MomentBPs { get; set; }
-    public float MomentBTotal { get; set; }
-    public float MomentC { get; set; }
+    public Dictionary<string, float> Predictions { get; } = new();
 
-    // Deflections
-    public float LeftDeflectionMin { get; set; }
-    public float LeftDeflectionMax { get; set; }
-    public float RightDeflectionMin { get; set; }
-    public float RightDeflectionMax { get; set; }
+    public float[] SpanDeflectionAbsMax { get; set; } = [];
+    public float[] SpanMomentMin { get; set; } = [];
+    public float[] SpanMomentMax { get; set; } = [];
+    public float[] SpanMomentAbsMax { get; set; } = [];
 
-    // Span moments
-    public float LeftMomentMin { get; set; }
-    public float LeftMomentMax { get; set; }
-    public float RightMomentMin { get; set; }
-    public float RightMomentMax { get; set; }
+    public float[] SupportDeflectionAbsMax { get; set; } = [];
+    public float[] SupportMomentMin { get; set; } = [];
+    public float[] SupportMomentMax { get; set; } = [];
+    public float[] SupportMomentAbsMax { get; set; } = [];
+    public float[] SupportReactionFz { get; set; } = [];
 }

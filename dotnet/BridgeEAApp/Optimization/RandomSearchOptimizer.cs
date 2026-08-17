@@ -6,9 +6,6 @@ public class RandomSearchOptimizer
 {
     private readonly Random _random = new(1);
 
-    private const float EccMin = -0.45f;
-    private const float EccMax = 0.45f;
-
     private const float MutationProbability = 0.85f;
     private const float MutationMaxDelta = 0.025f;
 
@@ -16,35 +13,29 @@ public class RandomSearchOptimizer
     private const float SnapToZeroTolerance = 0.0025f;
 
     public BridgeCandidate Optimize(
-        float leftSpanLengthM,
-        float rightSpanLengthM,
-        float udlKnPerM,
+        BridgeCandidate template,
         int iterations,
         int patience,
         OptimizationMode mode,
         BridgeFitnessEvaluator fitnessEvaluator)
     {
+        template.Validate();
+
         BridgeCandidate? bestCandidate = null;
         var bestFitness = float.MaxValue;
         var iterationsWithoutImprovement = 0;
 
-        for (int i = 0; i < iterations; i++)
+        for (var i = 0; i < iterations; i++)
         {
             BridgeCandidate candidate;
 
             if (bestCandidate == null)
             {
-                candidate = CreateZeroCandidate(
-                    leftSpanLengthM,
-                    rightSpanLengthM,
-                    udlKnPerM);
+                candidate = CreateZeroCandidate(template);
             }
             else if (mode == OptimizationMode.MonteCarlo)
             {
-                candidate = CreateRandomCandidate(
-                    leftSpanLengthM,
-                    rightSpanLengthM,
-                    udlKnPerM);
+                candidate = CreateRandomCandidate(template);
             }
             else if (
                 mode == OptimizationMode.MutationAroundBest &&
@@ -60,10 +51,7 @@ public class RandomSearchOptimizer
             }
             else
             {
-                candidate = CreateRandomCandidate(
-                    leftSpanLengthM,
-                    rightSpanLengthM,
-                    udlKnPerM);
+                candidate = CreateRandomCandidate(template);
             }
 
             var result = fitnessEvaluator.EvaluateDetailed(candidate);
@@ -77,17 +65,13 @@ public class RandomSearchOptimizer
 
                 Console.WriteLine(
                     $"Iter {i,8} | " +
-                    $"fitness = {fitness,10:F6} | " +
+                    $"fitness = {fitness,12:F6} | " +
+                    $"struct = {result.StructuralScore,10:F4} | " +
+                    $"cover = {result.CoverPenaltyScore,8:F4} | " +
+                    $"smooth = {result.SmoothnessPenaltyScore,8:F4} | " +
+                    $"jump = {result.JumpPenaltyScore,8:F4} | " +
                     $"sym = {result.SymmetryScore,8:F4} | " +
-                    $"A = {result.MomentA,8:F1} | " +
-                    $"Bps = {result.MomentBPs,8:F1} | " +
-                    $"Btot = {result.MomentBTotal,8:F1} | " +
-                    $"C = {result.MomentC,8:F1} | " +
-                    $"ecc = [{candidate.TendonEccLeftM:F3}, " +
-                    $"{candidate.TendonEccLeftSpanMidM:F3}, " +
-                    $"{candidate.TendonEccMidSupportM:F3}, " +
-                    $"{candidate.TendonEccRightSpanMidM:F3}, " +
-                    $"{candidate.TendonEccRightM:F3}]");
+                    $"ecc = {FormatEccPreview(candidate)}");
             }
             else
             {
@@ -97,7 +81,8 @@ public class RandomSearchOptimizer
             if (iterationsWithoutImprovement >= patience)
             {
                 Console.WriteLine();
-                Console.WriteLine($"Stopped after {i} iterations - no improvement for {patience} iterations.");
+                Console.WriteLine(
+                    $"Stopped after {i} iterations - no improvement for {patience} iterations.");
                 break;
             }
         }
@@ -106,66 +91,63 @@ public class RandomSearchOptimizer
             ?? throw new Exception("Optimization failed.");
     }
 
-    private BridgeCandidate CreateZeroCandidate(
-        float leftSpanLengthM,
-        float rightSpanLengthM,
-        float udlKnPerM)
+    private BridgeCandidate CreateZeroCandidate(BridgeCandidate template)
     {
-        return new BridgeCandidate
-        {
-            LeftSpanLengthM = leftSpanLengthM,
-            RightSpanLengthM = rightSpanLengthM,
-            UdlKnPerM = udlKnPerM,
+        var candidate = template.Clone();
 
-            TendonEccLeftM = 0.0f,
-            TendonEccLeftSpanMidM = 0.0f,
-            TendonEccMidSupportM = 0.0f,
-            TendonEccRightSpanMidM = 0.0f,
-            TendonEccRightM = 0.0f
-        };
+        for (var i = 0; i < BridgeCandidate.MaxTendonControlPoints; i++)
+            candidate.TendonEccControlPointsM[i] = 0.0f;
+
+        return candidate;
     }
 
-    private BridgeCandidate CreateRandomCandidate(
-        float leftSpanLengthM,
-        float rightSpanLengthM,
-        float udlKnPerM)
+    private BridgeCandidate CreateRandomCandidate(BridgeCandidate template)
     {
-        return new BridgeCandidate
-        {
-            LeftSpanLengthM = leftSpanLengthM,
-            RightSpanLengthM = rightSpanLengthM,
-            UdlKnPerM = udlKnPerM,
+        var candidate = template.Clone();
 
-            TendonEccLeftM = RandomEcc(),
-            TendonEccLeftSpanMidM = RandomEcc(),
-            TendonEccMidSupportM = RandomEcc(),
-            TendonEccRightSpanMidM = RandomEcc(),
-            TendonEccRightM = RandomEcc()
-        };
+        for (var i = 0; i < candidate.ActiveTendonControlPointCount; i++)
+            candidate.TendonEccControlPointsM[i] = RandomEcc(candidate);
+
+        for (var i = candidate.ActiveTendonControlPointCount;
+             i < BridgeCandidate.MaxTendonControlPoints;
+             i++)
+        {
+            candidate.TendonEccControlPointsM[i] = 0.0f;
+        }
+
+        return candidate;
     }
 
     private BridgeCandidate Mutate(BridgeCandidate parent)
     {
-        return new BridgeCandidate
-        {
-            LeftSpanLengthM = parent.LeftSpanLengthM,
-            RightSpanLengthM = parent.RightSpanLengthM,
-            UdlKnPerM = parent.UdlKnPerM,
+        var candidate = parent.Clone();
 
-            TendonEccLeftM = MutateEcc(parent.TendonEccLeftM),
-            TendonEccLeftSpanMidM = MutateEcc(parent.TendonEccLeftSpanMidM),
-            TendonEccMidSupportM = MutateEcc(parent.TendonEccMidSupportM),
-            TendonEccRightSpanMidM = MutateEcc(parent.TendonEccRightSpanMidM),
-            TendonEccRightM = MutateEcc(parent.TendonEccRightM)
-        };
+        for (var i = 0; i < candidate.ActiveTendonControlPointCount; i++)
+        {
+            if (_random.NextDouble() < MutationProbability)
+            {
+                candidate.TendonEccControlPointsM[i] =
+                    MutateEcc(candidate, candidate.TendonEccControlPointsM[i]);
+            }
+        }
+
+        for (var i = candidate.ActiveTendonControlPointCount;
+             i < BridgeCandidate.MaxTendonControlPoints;
+             i++)
+        {
+            candidate.TendonEccControlPointsM[i] = 0.0f;
+        }
+
+        return candidate;
     }
 
-    private float MutateEcc(float value)
+    private float MutateEcc(BridgeCandidate candidate, float value)
     {
         var delta =
             ((float)_random.NextDouble() * 2.0f - 1.0f) * MutationMaxDelta;
 
-        var mutated = Math.Clamp(value + delta, EccMin, EccMax);
+        var limit = GetEccLimit(candidate);
+        var mutated = Math.Clamp(value + delta, -limit, limit);
 
         if (Math.Abs(mutated) < SnapToZeroTolerance)
             return 0.0f;
@@ -173,8 +155,31 @@ public class RandomSearchOptimizer
         return mutated;
     }
 
-    private float RandomEcc()
+    private float RandomEcc(BridgeCandidate candidate)
     {
-        return EccMin + (float)_random.NextDouble() * (EccMax - EccMin);
+        var limit = GetEccLimit(candidate);
+
+        return -limit + (float)_random.NextDouble() * 2.0f * limit;
+    }
+
+    private static float GetEccLimit(BridgeCandidate candidate)
+    {
+        var limit =
+            candidate.BeamHeightM / 2.0f -
+            candidate.TendonCoverM -
+            0.005f;
+
+        return Math.Max(0.01f, limit);
+    }
+
+    private static string FormatEccPreview(BridgeCandidate candidate)
+    {
+        var active = candidate.ActiveTendonControlPointCount;
+
+        var values = candidate.TendonEccControlPointsM
+            .Take(active)
+            .Select(x => x.ToString("F3"));
+
+        return "[" + string.Join(", ", values) + "]";
     }
 }

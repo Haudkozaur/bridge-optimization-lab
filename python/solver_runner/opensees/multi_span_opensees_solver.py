@@ -35,7 +35,6 @@ class MultiSpanOpenSeesSolver:
 
         gamma_concrete = 25.0
         q_sw = -gamma_concrete * A
-        q_udl = -float(sampled["udl_kn_per_m"])
 
         p_total = int(sampled["n_tendons"]) * float(sampled["tendon_force_kn"])
 
@@ -70,8 +69,19 @@ class MultiSpanOpenSeesSolver:
 
         n_div = len(x_nodes) - 1
 
-        q_udl_elements = np.full(n_div, q_udl)
+        q_udl_elements = self._build_udl_elements(
+            sampled=sampled,
+            beam_divisions=beam_divisions,
+        )
+
+        if len(q_udl_elements) != n_div:
+            raise ValueError(
+                f"len(q_udl_elements)={len(q_udl_elements)}, but n_div={n_div}"
+            )
+
         q_sw_elements = np.full(n_div, q_sw)
+
+
 
         q_total_elements = (
             q_ps_elements
@@ -142,7 +152,48 @@ class MultiSpanOpenSeesSolver:
             for part in str(value).split(";")
             if part.strip()
         ]
+    
+    def _build_udl_elements(
+        self,
+        sampled: dict,
+        beam_divisions: list[int],
+    ) -> np.ndarray:
+        """
+        Builds element-level UDL vector from span-level UDL values.
 
+        Input convention:
+            udl_values_kn_per_m = "5.0;0.0;8.0"
+
+        Solver/OpenSees convention:
+            downward load is negative, so q_element = -q_span.
+        """
+
+        if "udl_values_kn_per_m" in sampled and sampled["udl_values_kn_per_m"]:
+            udl_values = self._parse_float_list(sampled["udl_values_kn_per_m"])
+
+            if len(udl_values) != len(beam_divisions):
+                raise ValueError(
+                    f"len(udl_values_kn_per_m)={len(udl_values)}, "
+                    f"but len(beam_divisions)={len(beam_divisions)}"
+                )
+
+            q_elements = []
+
+            for q_span, n_div in zip(udl_values, beam_divisions):
+                q_elements.extend([-float(q_span)] * int(n_div))
+
+            return np.array(q_elements, dtype=float)
+
+        # Backward compatibility with old CSV files.
+        if "udl_kn_per_m" in sampled and sampled["udl_kn_per_m"]:
+            n_div = sum(beam_divisions)
+            q_udl = -float(sampled["udl_kn_per_m"])
+            return np.full(n_div, q_udl, dtype=float)
+
+        raise ValueError(
+            "Missing UDL input. Expected 'udl_values_kn_per_m' "
+            "or legacy 'udl_kn_per_m'."
+        )
     def _build_tendon_x(self, span_lengths: list[float]) -> np.ndarray:
         points = []
         current_x = 0.0

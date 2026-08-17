@@ -6,63 +6,48 @@ internal static class SurrogateModelFactory
 {
     public static BridgeFitnessEvaluator CreateDefault(string modelsDirectory)
     {
-        MlSurrogateModel Load(string fileName, bool includeUdl)
+        if (!Directory.Exists(modelsDirectory))
+            throw new DirectoryNotFoundException($"Models directory not found: {modelsDirectory}");
+
+        var modelFiles = Directory
+            .GetFiles(modelsDirectory, "*.zip")
+            .OrderBy(x => x)
+            .ToArray();
+
+        if (modelFiles.Length == 0)
+            throw new Exception($"No .zip ML models found in: {modelsDirectory}");
+
+        var models = new Dictionary<string, MlSurrogateModel>();
+
+        foreach (var modelFile in modelFiles)
         {
-            return new MlSurrogateModel(
-                Path.Combine(modelsDirectory, fileName),
-                includeUdl);
+            var targetName = GetTargetName(modelFile);
+
+            if (models.ContainsKey(targetName))
+                throw new Exception($"Duplicate model target name: {targetName}");
+
+            models[targetName] = new MlSurrogateModel(
+                targetName,
+                modelFile);
         }
 
-        var middlePsReactionModel = Load(
-            "ps_middle_hyperstatic_reaction_LightGbm.zip",
-            includeUdl: false);
+        Console.WriteLine($"Loaded ML models: {models.Count}");
+        Console.WriteLine($"Models directory: {modelsDirectory}");
+        Console.WriteLine();
 
-        var middleTotalMomentModel = Load(
-            "total_moment_middle_support_LightGbm.zip",
-            includeUdl: true);
+        return new BridgeFitnessEvaluator(models);
+    }
 
-        var leftDeflectionMinModel = Load(
-            "total_deflection_left_span_min_LightGbm.zip",
-            includeUdl: true);
+    private static string GetTargetName(string modelPath)
+    {
+        var name = Path.GetFileNameWithoutExtension(modelPath);
 
-        var leftDeflectionMaxModel = Load(
-            "total_deflection_left_span_max_LightGbm.zip",
-            includeUdl: true);
+        if (name.EndsWith("_LightGbm", StringComparison.OrdinalIgnoreCase))
+            return name[..^"_LightGbm".Length];
 
-        var rightDeflectionMinModel = Load(
-            "total_deflection_right_span_min_LightGbm.zip",
-            includeUdl: true);
+        if (name.EndsWith("_FastTree", StringComparison.OrdinalIgnoreCase))
+            return name[..^"_FastTree".Length];
 
-        var rightDeflectionMaxModel = Load(
-            "total_deflection_right_span_max_LightGbm.zip",
-            includeUdl: true);
-
-        var leftMomentMinModel = Load(
-            "total_moment_left_span_min_LightGbm.zip",
-            includeUdl: true);
-
-        var leftMomentMaxModel = Load(
-            "total_moment_left_span_max_LightGbm.zip",
-            includeUdl: true);
-
-        var rightMomentMinModel = Load(
-            "total_moment_right_span_min_LightGbm.zip",
-            includeUdl: true);
-
-        var rightMomentMaxModel = Load(
-            "total_moment_right_span_max_LightGbm.zip",
-            includeUdl: true);
-
-        return new BridgeFitnessEvaluator(
-            middlePsReactionModel,
-            middleTotalMomentModel,
-            leftDeflectionMinModel,
-            leftDeflectionMaxModel,
-            rightDeflectionMinModel,
-            rightDeflectionMaxModel,
-            leftMomentMinModel,
-            leftMomentMaxModel,
-            rightMomentMinModel,
-            rightMomentMaxModel);
+        return name;
     }
 }

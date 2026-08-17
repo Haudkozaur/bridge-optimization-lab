@@ -7,21 +7,22 @@ namespace BridgeEAApp.Surrogate;
 public class MlSurrogateModel
 {
     private readonly PredictionEngine<BeamRecord, BeamPrediction> _predictionEngine;
-    private readonly bool _includeUdl;
 
-    public MlSurrogateModel(string modelPath, bool includeUdl)
+    public string Name { get; }
+
+    public MlSurrogateModel(string name, string modelPath)
     {
-        _includeUdl = includeUdl;
+        Name = name;
 
-        var mlContext = new MLContext();
+        var mlContext = new MLContext(seed: 1);
 
         var model = mlContext.Model.Load(modelPath, out _);
 
-        var featureCount = includeUdl ? 8 : 7;
-
         var inputSchemaDefinition = SchemaDefinition.Create(typeof(BeamRecord));
         inputSchemaDefinition[nameof(BeamRecord.Features)].ColumnType =
-            new VectorDataViewType(NumberDataViewType.Single, featureCount);
+            new VectorDataViewType(
+                NumberDataViewType.Single,
+                MultiSpanFeatureBuilder.FeatureCount);
 
         _predictionEngine =
             mlContext.Model.CreatePredictionEngine<BeamRecord, BeamPrediction>(
@@ -29,11 +30,17 @@ public class MlSurrogateModel
                 inputSchemaDefinition: inputSchemaDefinition);
     }
 
-    public float Predict(BridgeCandidate candidate)
+    public float Predict(float[] features)
     {
+        if (features.Length != MultiSpanFeatureBuilder.FeatureCount)
+        {
+            throw new Exception(
+                $"Feature vector size mismatch. Expected {MultiSpanFeatureBuilder.FeatureCount}, got {features.Length}.");
+        }
+
         var input = new BeamRecord
         {
-            Features = candidate.ToFeatures(_includeUdl)
+            Features = features
         };
 
         return _predictionEngine.Predict(input).Score;

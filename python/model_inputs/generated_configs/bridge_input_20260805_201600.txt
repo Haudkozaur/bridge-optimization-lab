@@ -1,0 +1,74 @@
+# Bridge input configuration
+# Generated: 2026-08-05 20:16:00
+
+[RUN]
+n_models=1000000
+random_seed=None
+
+[GEOMETRY]
+n_spans.mode=random
+n_spans.unit=-
+n_spans.from=2
+n_spans.to=10
+span_length_m.mode=random
+span_length_m.unit=m
+span_length_m.from=8.0
+span_length_m.to=30.0
+beam_height_m.mode=random
+beam_height_m.unit=m
+beam_height_m.from=0.75
+beam_height_m.to=2.0
+beam_width_m.mode=random
+beam_width_m.unit=m
+beam_width_m.from=0.4
+beam_width_m.to=1.2
+
+[LOADS]
+udl_kn_per_m.mode=random
+udl_kn_per_m.unit=kN/m
+udl_kn_per_m.from=0.0
+udl_kn_per_m.to=15.0
+udl_load_type.mode=random
+udl_load_type.from=1 · True UDL
+udl_load_type.to=4 · Span + random UDL
+self_weight_case=Self Weight
+udl_case=UDL
+prestress_case=Prestress
+
+[SUPPORTS]
+left_support=111000
+internal_support=011000
+right_support=011000
+
+[TENDON]
+n_tendons.mode=random
+n_tendons.unit=-
+n_tendons.from=1
+n_tendons.to=5
+tendon_force_kn.mode=fixed
+tendon_force_kn.unit=kN/tendon
+tendon_force_kn.value=220.0
+tendon_area_mm2.mode=fixed
+tendon_area_mm2.unit=mm2/tendon
+tendon_area_mm2.value=150.0
+tendon_cover_m.mode=fixed
+tendon_cover_m.unit=m
+tendon_cover_m.value=0.05
+tendon_control_points_per_span=5
+tendon_shape_type.mode=random
+tendon_shape_type.from=1 · Full random
+tendon_shape_type.to=7 · Reasonable symmetric
+
+[MATERIALS_AND_SECTION]
+concrete_material_name=C40/50
+concrete_material_code=EN04(RC)
+concrete_material_grade=C40/50
+tendon_material_name=TD_steel
+tendon_material_code=IS(S)
+tendon_material_grade=E450
+tendon_material_id=1
+section_name=PSC_RECT_VALUE
+section_id=2
+outer_polygon=Automatic rectangle
+inner_polygons=None
+

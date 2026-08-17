@@ -29,7 +29,7 @@ DEFAULT_INPUT_CSV = (
     PROJECT_ROOT
     / "model_inputs"
     / "prepared_inputs"
-    / "20260607_013934"
+    / "20260622_205646"
     / "input.csv"
 )
 
@@ -170,7 +170,47 @@ def parse_int_list(value) -> list[int]:
         if part.strip()
     ]
 
+def build_udl_elements_from_row(
+    row: dict,
+    beam_divisions: list[int],
+) -> tuple[str, list[float], np.ndarray]:
+    """
+    Returns:
+        udl_load_type,
+        udl_values_kn_per_m per span,
+        q_udl_elements per FEM element
+    """
 
+    if "udl_values_kn_per_m" in row and row["udl_values_kn_per_m"]:
+        udl_load_type = row.get("udl_load_type", "")
+        udl_values = parse_float_list(row["udl_values_kn_per_m"])
+
+        if len(udl_values) != len(beam_divisions):
+            raise ValueError(
+                f"len(udl_values_kn_per_m)={len(udl_values)}, "
+                f"but len(beam_divisions)={len(beam_divisions)}"
+            )
+
+        q_elements = []
+
+        for q_span, n_div in zip(udl_values, beam_divisions):
+            q_elements.extend([-float(q_span)] * int(n_div))
+
+        return udl_load_type, udl_values, np.array(q_elements, dtype=float)
+
+    if "udl_kn_per_m" in row and row["udl_kn_per_m"]:
+        udl = to_float(row, "udl_kn_per_m")
+        q_elements = []
+
+        for n_div in beam_divisions:
+            q_elements.extend([-udl] * int(n_div))
+
+        return "LEGACY_TRUE_UDL", [udl for _ in beam_divisions], np.array(q_elements)
+
+    raise ValueError(
+        "Missing UDL input. Expected 'udl_values_kn_per_m' "
+        "or legacy 'udl_kn_per_m'."
+    )
 def load_model_row(input_csv: Path, model_index: int) -> dict:
     with input_csv.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -560,7 +600,8 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
 
     gamma_concrete = 25.0
     q_sw = -gamma_concrete * A
-    udl = to_float(row, "udl_kn_per_m")
+
+    n_tendons = to_int(row, "n_tendons")
 
     n_tendons = to_int(row, "n_tendons")
     tendon_force_kn = to_float(row, "tendon_force_kn")
@@ -632,8 +673,17 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
         prestress_force=P_total,
     )
 
-    q_udl_elements = np.full(n_div, -udl)
+    # q_udl_elements = np.full(n_div, -udl)
     q_sw_elements = np.full(n_div, q_sw)
+    udl_load_type, udl_values, q_udl_elements = build_udl_elements_from_row(
+        row=row,
+        beam_divisions=beam_divisions,
+    )
+
+    if len(q_udl_elements) != n_div:
+        raise ValueError(
+            f"len(q_udl_elements)={len(q_udl_elements)}, but n_div={n_div}"
+    )
 
     q_ps_angle_elements, prestress_angle_moment_loads = (
         prestress_element_q_and_moment_loads_from_spline(
@@ -796,7 +846,8 @@ def build_debug_data(input_csv: Path, model_index: int, case_filter):
         "h": h,
 
         "q_sw": q_sw,
-        "udl": udl,
+        "udl_load_type": udl_load_type,
+        "udl_values": udl_values,
         "q_udl_elements": q_udl_elements,
         "q_sw_elements": q_sw_elements,
 
@@ -980,6 +1031,14 @@ def run_prints(data, selected_prints):
         print(
             f"element length min/max = "
             f"{element_lengths.min():.6f} / {element_lengths.max():.6f} m"
+        )
+        print("=== UDL ===")
+        print(f"udl_load_type = {data['udl_load_type']}")
+        print(f"udl_values_kn_per_m = {data['udl_values']}")
+        print_q_summary(
+            "UDL q elements",
+            data["q_udl_elements"],
+            element_lengths,
         )
         print()
 
@@ -1635,7 +1694,7 @@ def main():
     USE_HARDCODED_DEBUG = True
 
     if USE_HARDCODED_DEBUG:
-        args.model = 1
+        args.model = 5
 
         args.cases = [
             # "all",

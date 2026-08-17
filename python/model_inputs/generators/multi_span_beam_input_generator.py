@@ -75,6 +75,35 @@ class MultiSpanBeamInputGenerator:
 
         return self.config.TendonShapeType(shape_value)
     
+    def _sample_udl_load_type(self, tendon_shape_type):
+        if self.config.udl_load_type is not None:
+            return self.config.udl_load_type
+
+        is_symmetric_beam = self._is_symmetric_shape(tendon_shape_type)
+
+        base_values = [1, 2, 3, 4]
+
+        if is_symmetric_beam:
+            base_values.extend([5, 6])
+
+        min_value = self.config.udl_load_type_randomizer.min
+        max_value = self.config.udl_load_type_randomizer.max
+
+        allowed_values = [
+            value
+            for value in base_values
+            if min_value <= value <= max_value
+        ]
+
+        if not allowed_values:
+            raise ValueError(
+                "No available UDL load types for current beam symmetry and "
+                f"udl_load_type_randomizer={min_value}..{max_value}"
+            )
+
+        load_type_value = self.rng.choice(allowed_values)
+
+        return self.config.UdlLoadType(load_type_value)
     def get_max_node_id(self) -> int:
         max_n_spans = self.config.n_spans.max
         max_span_length = self.config.span_length_m.max
@@ -132,7 +161,117 @@ class MultiSpanBeamInputGenerator:
             self.config.TendonShapeType.FORCED_SYMMETRIC,
             self.config.TendonShapeType.FORCED_REASONABLE_SYMMETRIC,
         }
+    def _mirror_values(self, left_values: list[float], n_spans: int) -> list[float]:
+        if n_spans % 2 == 0:
+            return left_values + list(reversed(left_values))
 
+        return left_values + list(reversed(left_values[:-1]))
+    
+    def _sample_udl_load_type(self, tendon_shape_type):
+        if self.config.udl_load_type is not None:
+            if (
+                self.config.udl_load_type
+                in {
+                    self.config.UdlLoadType.SYMMETRIC_RANDOM_SPAN_UDL,
+                    self.config.UdlLoadType.SYMMETRIC_RANDOM_UDL,
+                }
+                and not self._is_symmetric_shape(tendon_shape_type)
+            ):
+                raise ValueError(
+                    "Symmetric UDL load type can only be used with symmetric beam shape"
+                )
+
+            return self.config.udl_load_type
+
+        min_value = self.config.udl_load_type_randomizer.min
+        max_value = self.config.udl_load_type_randomizer.max
+
+        if self._is_symmetric_shape(tendon_shape_type):
+            max_value = max(max_value, 6)
+        else:
+            max_value = min(max_value, 4)
+
+        load_type_value = self.rng.randint(min_value, max_value)
+
+        return self.config.UdlLoadType(load_type_value)
+    
+    def _sample_udl_values_per_span(
+        self,
+        n_spans: int,
+        udl_load_type,
+    ) -> list[float]:
+        match udl_load_type:
+            case self.config.UdlLoadType.TRUE_UDL:
+                q = self._sample_float_range(self.config.udl_kn_per_m, ndigits=2)
+                return [q for _ in range(n_spans)]
+
+            case self.config.UdlLoadType.RANDOM_SPAN_UDL:
+                q = self._sample_float_range(self.config.udl_kn_per_m, ndigits=2)
+
+                values = [
+                    q if self.rng.choice([True, False]) else 0.0
+                    for _ in range(n_spans)
+                ]
+
+                if all(value == 0.0 for value in values):
+                    forced_index = self.rng.randrange(n_spans)
+                    values[forced_index] = q
+
+                return values
+
+            case self.config.UdlLoadType.RANDOM_UDL:
+                return [
+                    self._sample_float_range(self.config.udl_kn_per_m, ndigits=2)
+                    for _ in range(n_spans)
+                ]
+
+            case self.config.UdlLoadType.RANDOM_SPAN_RANDOM_UDL:
+                values = [
+                    self._sample_float_range(self.config.udl_kn_per_m, ndigits=2)
+                    if self.rng.choice([True, False])
+                    else 0.0
+                    for _ in range(n_spans)
+                ]
+
+                if all(value == 0.0 for value in values):
+                    forced_index = self.rng.randrange(n_spans)
+                    values[forced_index] = self._sample_float_range(
+                        self.config.udl_kn_per_m,
+                        ndigits=2,
+                    )
+
+                return values
+
+            case self.config.UdlLoadType.SYMMETRIC_RANDOM_SPAN_UDL:
+                q = self._sample_float_range(self.config.udl_kn_per_m, ndigits=2)
+                left_count = (n_spans + 1) // 2
+
+                left_values = [
+                    q if self.rng.choice([True, False]) else 0.0
+                    for _ in range(left_count)
+                ]
+
+                values = self._mirror_values(left_values, n_spans)
+
+                if all(value == 0.0 for value in values):
+                    forced_index = self.rng.randrange(left_count)
+                    left_values[forced_index] = q
+                    values = self._mirror_values(left_values, n_spans)
+
+                return values
+
+            case self.config.UdlLoadType.SYMMETRIC_RANDOM_UDL:
+                left_count = (n_spans + 1) // 2
+
+                left_values = [
+                    self._sample_float_range(self.config.udl_kn_per_m, ndigits=2)
+                    for _ in range(left_count)
+                ]
+
+                return self._mirror_values(left_values, n_spans)
+
+            case _:
+                raise ValueError(f"Unsupported udl_load_type: {udl_load_type}")
     def _sample_random_ecc(self, e_min: float, e_max: float) -> float:
         return round(self.rng.uniform(e_min, e_max), 3)
 
@@ -204,8 +343,8 @@ class MultiSpanBeamInputGenerator:
             raise ValueError(
                 f"Invalid tendon eccentricity limits: e_min={e_min}, e_max={e_max}"
             )
-
         return e_min, e_max
+    
     def get_max_support_count(self) -> int:
         return self.config.n_spans.max + 1
     
@@ -220,6 +359,12 @@ class MultiSpanBeamInputGenerator:
 
         span_lengths_m = self._sample_span_lengths(n_spans, tendon_shape_type)
         
+        udl_load_type = self._sample_udl_load_type(tendon_shape_type)
+
+        udl_values_kn_per_m = self._sample_udl_values_per_span(
+            n_spans=n_spans,
+            udl_load_type=udl_load_type,
+        )
 
         beam_divisions = [
             self._get_divisions_from_span_length(span_length_m)
@@ -249,8 +394,9 @@ class MultiSpanBeamInputGenerator:
             "beam_width_m": beam_width_m,
             "tendon_cover_m": tendon_cover_m,
 
-            "udl_kn_per_m": self._sample_float_range(
-                self.config.udl_kn_per_m,
+            "udl_load_type": udl_load_type.name,
+            "udl_values_kn_per_m": self._serialize_float_list(
+                udl_values_kn_per_m,
                 ndigits=2,
             ),
 
@@ -278,7 +424,8 @@ class MultiSpanBeamInputGenerator:
             "tendon_control_points_per_span",
             "tendon_ecc_control_points_m",
 
-            "udl_kn_per_m",
+            "udl_load_type",
+            "udl_values_kn_per_m",
 
             "beam_height_m",
             "beam_width_m",
